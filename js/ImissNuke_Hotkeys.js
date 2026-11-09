@@ -6258,6 +6258,7 @@
 					onText: 'Search Blocked', offText: 'Search Opens',
 					note: 'A wire pulled from an output and dropped on empty canvas: opens the node search and wires in the new node, or does nothing.' },
 				{ key: 'perfSquareCorners', icon: 'square', label: 'Square Corners', kind: 'toggle',
+					when: () => NukePerformance.available(),
 					note: 'Nodes drawn with square corners: four fewer arcs per node on every frame. Helps on big graphs.' }
 			];
 		}
@@ -6349,7 +6350,9 @@
 			if (!modal) return;
 			const on = config.masterEnabled !== false;
 			const keysOpen = !!ImissNukeUI._keysOpen;
-			const rows = ImissNukeUI.ROWS.map(r => {
+			// ⚑ a row whose target this frontend has not got is not offered:
+			// a switch that cannot act is worse than no switch
+			const rows = ImissNukeUI.ROWS.filter(r => !r.when || r.when()).map(r => {
 				const dim = (r.kind !== 'master' && !on) || (r.needs && !config[r.needs]);
 				const cls = dim ? ' in-off' : '';
 				return `<label class="in-l${cls}">${inIco(r.icon, 14)}<span>${r.label}</span></label>`
