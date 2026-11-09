@@ -10,7 +10,7 @@
  *  - Alt + H: Ocultar cables de entrada (Hide Inputs) / Enlaces virtuales Set&Get
  *  - Ctrl + D: Duplicar sin conexiones
  *  - Ctrl + E: Clonar manteniendo conexiones de entrada
- *  - Shift + Q: Auto-conectar fuentes al último nodo seleccionado o en cadena
+ *  - Shift + Q: Conectar la selección al nodo de la derecha (imagen o video primero, nunca a un widget; toma el socket si ya lo alimenta otro)
  *  - Ctrl + Shift + C: Paleta flotante de color para nodos y grupos
  *  - Ctrl + Shift + X: Extraer nodo y puentear cables
  *  - Ctrl + Shift + S: Sustituir / Reemplazar nodo (Swap)
@@ -3271,84 +3271,277 @@
 			setTimeout(() => step(1), 0);
 		}
 
+		/* ---- CONECTAR LO QUE SE TIENE QUE CONECTAR (Shift+Q y Tab) ----------
+		 *
+		 * Jorge: "que sí conecte lo que tiene que conectar, en especial con el
+		 * OCIO Read… quiere conectar el alpha a una imagen, pero si es video no
+		 * conecta la salida (ComfyUI Video)… o conecta por atrás al source,
+		 * cuando realmente no uso esa parte. Lo que más uso es el de imagen o
+		 * el de video."
+		 *
+		 * Lo que estaba mal, y lo que hace cada pieza de abajo:
+		 *   1. GANABA EL PRIMER PAR QUE CUADRARA, en orden de slot. En el OCIO
+		 *      Read `info` (STRING, slot 3) va antes que `ComfyUI Video`
+		 *      (slot 4), así que un STRING le ganaba al VIDEO. Ahora cada par
+		 *      (salida, entrada) se CALIFICA (`sqScore`) y gana el mejor.
+		 *   2. CUALQUIER ENTRADA SERVÍA. Con Nodes 2.0 cada widget es un socket,
+		 *      y `source` del Read es un STRING. Ahora un widget nunca recibe
+		 *      por Shift+Q: sólo los sockets de verdad.
+		 *   3. ALPHA, FPS, INFO Y METADATA SON SECUNDARIAS. Sólo se conectan
+		 *      cuando ninguna salida principal (imagen, video, latent…) tiene a
+		 *      dónde ir en ese nodo — un Invert Mask recibe el alpha; un nodo
+		 *      que ya tiene su imagen de OTRO nodo no recibe el alpha en su
+		 *      lugar. Y si su imagen viene de ESTE mismo nodo, un segundo
+		 *      Shift+Q sí agrega el alpha: imagen primero, alpha después.
+		 *   4. IMAGEN O VIDEO SEGÚN LA FUENTE. Si el nodo trae las dos salidas
+		 *      y está leyendo un video (frame_mode 'video', o un .mov/.mp4… en
+		 *      un widget), el VIDEO le gana a la IMAGE; si no, al revés. Un nodo
+		 *      que sólo acepta una de las dos recibe esa, sea lo que sea.
+		 *   5. EL DESTINO ERA EL ID MÁS ALTO, no "el último seleccionado": la
+		 *      lista de selección sale ordenada por id. Ahora recibe el de la
+		 *      DERECHA, y si su socket ya lo alimenta otro nodo, Shift+Q lo TOMA
+		 *      (la captura de Jorge: el Read nuevo reemplaza al PNG viejo en el
+		 *      reroute, como conectar encima en Nuke). Ctrl+Z lo regresa.
+		 * =================================================================== */
+		static sqType(t) {
+			return String(Array.isArray(t) ? t.join(',') : (t == null ? '' : t)).toUpperCase().trim();
+		}
+
+		static sqIsScalar(t) {
+			return ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'BOOL', 'NUMBER', 'COMBO'].includes(t);
+		}
+
+		// Lo que trae el nodo: un video, o una imagen / secuencia
+		static sqIsVideoSource(node) {
+			const ws = node && node.widgets;
+			if (!Array.isArray(ws)) return false;
+			const ext = /\.(mov|mp4|m4v|mkv|avi|webm|mxf|wmv|flv|mpe?g|m2ts|mts|gif)\s*$/i;
+			for (const w of ws) {
+				if (!w) continue;
+				if (w.name === 'frame_mode' && w.value === 'video') return true;
+				if (typeof w.value === 'string' && ext.test(w.value)) return true;
+			}
+			return false;
+		}
+
+		static sqContext(src) {
+			const outs = (src && src.outputs) || [];
+			const types = outs.map(o => ImissNukeManager.sqType(o && o.type));
+			const hasImage = types.includes('IMAGE');
+			return {
+				hasImage,
+				hasImageAndVideo: hasImage && types.includes('VIDEO'),
+				video: ImissNukeManager.sqIsVideoSource(src)
+			};
+		}
+
+		// alpha (MASK junto a una IMAGE), fps, info, metadata
+		static sqIsSecondary(type, ctx) {
+			return ImissNukeManager.sqIsScalar(type) || (type === 'MASK' && ctx.hasImage);
+		}
+
+		// Qué tan bien cuadra la salida `out` con la entrada `inp`; -1 = no cuadra.
+		// No mira si la entrada está ocupada: eso lo decide quien la llama.
+		//   explicit: el cable lo eligió el artista (lo soltó él) — entonces sí
+		//   puede entrar a un widget, y lo secundario a un comodín
+		static sqScore(out, oi, inp, ii, ctx, explicit) {
+			if (!out || !inp) return -1;
+			if (inp.widget && !explicit) return -1;        // ⚑ nunca a un widget (source, prompt…)
+			const ot = ImissNukeManager.sqType(out.type);
+			const it = ImissNukeManager.sqType(inp.type);
+			if (!ot || !it) return -1;
+			const secondary = ImissNukeManager.sqIsSecondary(ot, ctx);
+			let s;
+			if (ot === it && ot !== '*') s = 100;
+			else if (it === '*') {
+				if (secondary && !explicit) return -1;      // a un comodín sólo va lo principal
+				s = 40;
+			} else if (ot === '*') {
+				if (ImissNukeManager.sqIsScalar(it)) return -1;
+				s = 30;
+			} else {
+				const a = ot.split(',').map(x => x.trim());
+				const b = it.split(',').map(x => x.trim());
+				if (!a.some(x => b.includes(x))) return -1;
+				s = 80;
+			}
+			if (ctx.hasImageAndVideo) {
+				if (ot === 'VIDEO') s += ctx.video ? 30 : -5;
+				if (ot === 'IMAGE') s += ctx.video ? -5 : 30;
+			}
+			// mismo nombre, mismo dato: metadata→metadata le gana a info→metadata
+			// en el OCIO Write, alpha→alpha a cualquier otro MASK
+			const nm = (x) => String((x && (x.name || x.label)) || '').toLowerCase().trim();
+			if (nm(out) && nm(out) === nm(inp)) s += 15;
+			return s - oi * 0.5 - ii * 0.1;
+		}
+
+		// { origin_id, origin_slot } de un link, venga el grafo con Map u objeto
+		static sqLink(graph, linkId) {
+			if (linkId == null || !graph) return null;
+			const L = graph.links || graph._links;
+			let l = null;
+			try { l = (L && typeof L.get === 'function') ? L.get(linkId) : (L ? L[linkId] : null); } catch (e) {}
+			if (!l) return null;
+			return Array.isArray(l) ? { origin_id: l[1], origin_slot: l[2] }
+				: { origin_id: l.origin_id, origin_slot: l.origin_slot };
+		}
+
+		static sqLinkOrigin(graph, linkId) {
+			const l = ImissNukeManager.sqLink(graph, linkId);
+			return l ? l.origin_id : null;
+		}
+
+		// El mejor par de `src` hacia `dst`, o null.
+		//   onlyOutput: un slot de salida fijo (el cable que se soltó)
+		//   replace:    Shift+Q — sin socket libre, la salida principal TOMA el
+		//               socket que alimenta otro nodo (Nuke: conectar encima
+		//               reemplaza). Devuelve { …, replace: true }.
+		//   claimed:    sockets de `dst` que ya puso ESTE Shift+Q — no se pisan
+		static sqBest(src, dst, onlyOutput = null, opts = {}) {
+			if (!src || !dst || !src.outputs || !dst.inputs || src === dst) return null;
+			const ctx = ImissNukeManager.sqContext(src);
+			const graph = src.graph || dst.graph || (typeof app !== 'undefined' ? app.graph : null);
+			const claimed = opts.claimed || null;
+			const origin = (inp) => ImissNukeManager.sqLinkOrigin(graph, inp.link);
+			// ⚑ IMAGE y VIDEO son la MISMA imagen en dos formas (el OCIO Write
+			// las toma como excluyentes): si `src` ya alimenta a `dst` por una,
+			// la otra no se ofrece — el segundo Shift+Q va al alpha, no al video
+			const fed = new Set();
+			for (const inp of dst.inputs) {
+				if (!inp || inp.link == null) continue;
+				const l = ImissNukeManager.sqLink(graph, inp.link);
+				if (l && l.origin_id === src.id && src.outputs[l.origin_slot]) {
+					fed.add(ImissNukeManager.sqType(src.outputs[l.origin_slot].type));
+				}
+			}
+			const twin = { IMAGE: 'VIDEO', VIDEO: 'IMAGE' };
+			// occupied: false = sólo libres; true = sólo los que alimenta OTRO nodo
+			const pick = (wantSecondary, explicit, occupied) => {
+				let best = null;
+				for (let oi = 0; oi < src.outputs.length; oi++) {
+					if (onlyOutput != null && oi !== onlyOutput) continue;
+					const out = src.outputs[oi];
+					if (!out) continue;
+					const ot = ImissNukeManager.sqType(out.type);
+					const sec = ImissNukeManager.sqIsSecondary(ot, ctx);
+					if (onlyOutput == null && sec !== wantSecondary) continue;
+					if (onlyOutput == null && ctx.hasImageAndVideo && twin[ot] && fed.has(twin[ot])) continue;
+					for (let ii = 0; ii < dst.inputs.length; ii++) {
+						const inp = dst.inputs[ii];
+						if (!inp) continue;
+						if (occupied) {
+							if (inp.link == null || (claimed && claimed.has(ii))) continue;
+							const o = origin(inp);
+							if (o == null || o === src.id) continue;
+						} else if (inp.link != null) continue;
+						const s = ImissNukeManager.sqScore(out, oi, inp, ii, ctx, explicit);
+						if (s >= 0 && (!best || s > best.score)) best = { oi, ii, score: s, replace: !!occupied };
+					}
+				}
+				return best;
+			};
+
+			if (onlyOutput != null) return pick(false, false, false) || pick(false, true, false);
+
+			// 1. lo principal a un socket libre
+			const primary = pick(false, false, false);
+			if (primary) return primary;
+			// 2. Shift+Q: lo principal toma el socket que alimenta OTRO nodo —
+			//    el Read nuevo reemplaza al viejo, y el alpha no se cuela en su lugar
+			if (opts.replace) {
+				const swap = pick(false, false, true);
+				if (swap) return swap;
+			}
+			// 3. lo secundario (alpha, fps, info) a un socket libre, sólo si
+			//    ninguna salida principal tiene a dónde ir aquí — un socket
+			//    principal que alimenta OTRO nodo lo bloquea; uno que alimenta
+			//    ESTE mismo nodo no (segundo Shift+Q = el alpha)
+			for (let oi = 0; oi < src.outputs.length; oi++) {
+				const out = src.outputs[oi];
+				if (!out || ImissNukeManager.sqIsSecondary(ImissNukeManager.sqType(out.type), ctx)) continue;
+				for (let ii = 0; ii < dst.inputs.length; ii++) {
+					const inp = dst.inputs[ii];
+					if (!inp || inp.link == null) continue;
+					if (ImissNukeManager.sqScore(out, oi, inp, ii, ctx, false) < 0) continue;
+					if (origin(inp) !== src.id) return null;
+				}
+			}
+			return pick(true, false, false);
+		}
+
+		// Shift+Q. Dos nodos: la dirección la da el canvas (el de la DERECHA
+		// recibe — el grafo corre de izquierda a derecha); si sólo una dirección
+		// tiene algo que conectar, ésa, y un socket libre le gana a un
+		// reemplazo. Más de dos: todos al de más a la derecha que pueda
+		// recibir, de arriba a abajo; si eso no conecta nada, en cadena de
+		// izquierda a derecha. Devuelve cuántos cables puso.
+		static smartConnect(nodes, multi = false) {
+			const list = (nodes || []).filter(n => n && n.pos);
+			if (list.length < 2) return 0;
+			const claimedBy = new Map();      // dst -> Set(input index) puestos aquí
+			const best = (src, dst) => ImissNukeManager.sqBest(src, dst, null,
+				{ replace: true, claimed: claimedBy.get(dst) });
+			const link = (src, dst) => {
+				let made = 0;
+				for (;;) {
+					const c = best(src, dst);
+					if (!c) break;
+					try { src.connect(c.oi, dst, c.ii); } catch (e) { break; }
+					const inp = dst.inputs[c.ii];
+					if (!inp || inp.link == null) break;
+					if (!claimedBy.has(dst)) claimedBy.set(dst, new Set());
+					claimedBy.get(dst).add(c.ii);
+					made++;
+					if (!multi) break;
+				}
+				return made;
+			};
+
+			if (list.length === 2) {
+				const [a, b] = list;
+				const ab = best(a, b);
+				const ba = best(b, a);
+				if (!ab && !ba) return 0;
+				let fwd;
+				if (ab && !ba) fwd = true;
+				else if (ba && !ab) fwd = false;
+				else if (ab.replace !== ba.replace) fwd = !ab.replace;
+				else if (a.pos[0] !== b.pos[0]) fwd = b.pos[0] > a.pos[0];
+				else fwd = ab.score >= ba.score;
+				return fwd ? link(a, b) : link(b, a);
+			}
+
+			const byX = [...list].sort((p, q) => p.pos[0] - q.pos[0]);
+			let count = 0;
+			for (let t = byX.length - 1; t >= 0 && count === 0; t--) {
+				const target = byX[t];
+				const sources = list.filter(n => n !== target).sort((p, q) => p.pos[1] - q.pos[1]);
+				if (!sources.some(s => best(s, target))) continue;
+				for (const s of sources) count += link(s, target);
+			}
+			if (count === 0) {
+				for (let n = 0; n < byX.length - 1; n++) count += link(byX[n], byX[n + 1]);
+			}
+			return count;
+		}
+
 		static connectSourceToNewNode(src, node, preferredOutputSlot = null) {
 			if (!src || !node) return;
 			if (!src.outputs || src.outputs.length === 0) return;
 			if (!node.inputs || node.inputs.length === 0) return;
 
+			// ⚑ el mismo criterio que Shift+Q (`sqBest`): el mejor par, nunca a un
+			// widget, imagen o video según la fuente. Sin el viejo "salida 0 a
+			// entrada 0 a ciegas", que podía meter una IMAGE en un widget.
+			// Con un cable soltado (preferredOutputSlot) manda ESA salida, y ahí
+			// sí puede entrar a un widget si no hay socket: el cable lo eligió él.
 			let connected = false;
-
-			// 1. If preferredOutputSlot is provided (e.g. from output wire drop)
-			if (preferredOutputSlot != null && src.outputs[preferredOutputSlot]) {
-				const out = src.outputs[preferredOutputSlot];
-				for (let ii = 0; ii < node.inputs.length; ii++) {
-					const inp = node.inputs[ii];
-					if (!inp || inp.link != null) continue;
-					if (GeometryUtils.areTypesCompatible(out.type, inp.type)) {
-						src.connect(preferredOutputSlot, node, ii);
-						connected = true;
-						break;
-					}
-				}
-				if (!connected) {
-					// Connect to first unlinked input
-					for (let ii = 0; ii < node.inputs.length; ii++) {
-						const inp = node.inputs[ii];
-						if (!inp || inp.link != null) continue;
-						src.connect(preferredOutputSlot, node, ii);
-						connected = true;
-						break;
-					}
-				}
-			}
-
-			// 2. Pass 1: exact slot type match (e.g. IMAGE->IMAGE, LATENT->LATENT, MODEL->MODEL)
-			if (!connected) {
-				for (let oi = 0; oi < src.outputs.length; oi++) {
-					const out = src.outputs[oi];
-					if (!out) continue;
-					const outType = String(out.type || '').toUpperCase();
-					if (!outType || outType === '*') continue;
-
-					for (let ii = 0; ii < node.inputs.length; ii++) {
-						const inp = node.inputs[ii];
-						if (!inp || inp.link != null) continue;
-						const inType = String(inp.type || '').toUpperCase();
-
-						if (outType === inType) {
-							src.connect(oi, node, ii);
-							connected = true;
-							break;
-						}
-					}
-					if (connected) break;
-				}
-			}
-
-			// 3. Pass 2: compatible slot types via GeometryUtils
-			if (!connected) {
-				for (let oi = 0; oi < src.outputs.length; oi++) {
-					const out = src.outputs[oi];
-					if (!out) continue;
-
-					for (let ii = 0; ii < node.inputs.length; ii++) {
-						const inp = node.inputs[ii];
-						if (!inp || inp.link != null) continue;
-
-						if (GeometryUtils.areTypesCompatible(out.type, inp.type)) {
-							src.connect(oi, node, ii);
-							connected = true;
-							break;
-						}
-					}
-					if (connected) break;
-				}
-			}
-
-			// 4. Pass 3: Nuke default - chain primary output 0 to primary input 0 if free
-			if (!connected && node.inputs[0] && node.inputs[0].link == null && src.outputs[0]) {
+			const pref = (preferredOutputSlot != null && src.outputs[preferredOutputSlot]) ? preferredOutputSlot : null;
+			const best = ImissNukeManager.sqBest(src, node, pref);
+			if (best) {
 				try {
-					src.connect(0, node, 0);
+					src.connect(best.oi, node, best.ii);
 					connected = true;
 				} catch (e) {}
 			}
@@ -4203,79 +4396,20 @@
 					return;
 				}
 
-				// ---- Shift+Q: Auto-conectar fuentes al último nodo o en cadena ----
+				// ---- Shift+Q: conectar lo que se tiene que conectar ----
+				// (las reglas viven en `smartConnect` / `sqBest`)
 				if (e.shiftKey && (e.key === 'q' || e.key === 'Q')) {
 					e.preventDefault();
 					e.stopPropagation();
 
 					const canvas = app.canvas;
 					const graph = app.graph;
-					const orderedNodes = ImissNukeManager.getOrderedSelectedNodes(canvas);
-					if (orderedNodes.length < 2) return;
-
-					const multiMode = window.__imissNukeConfig && window.__imissNukeConfig.multiAutoConnect;
-					let connectionsCount = 0;
-					const targetNode = orderedNodes[orderedNodes.length - 1];
-					const sourceNodes = orderedNodes.slice(0, orderedNodes.length - 1);
-					let connectedToTarget = false;
-
-					if (targetNode && targetNode.inputs && targetNode.inputs.length > 0) {
-						for (const src of sourceNodes) {
-							if (!src || !src.outputs) continue;
-							let srcConnected = false;
-
-							for (let oi = 0; oi < src.outputs.length; oi++) {
-								const output = src.outputs[oi];
-								if (!output) continue;
-
-								for (let ii = 0; ii < targetNode.inputs.length; ii++) {
-									const input = targetNode.inputs[ii];
-									if (!input || input.link != null) continue;
-
-									if (GeometryUtils.areTypesCompatible(output.type, input.type)) {
-										src.connect(oi, targetNode, ii);
-										connectionsCount++;
-										srcConnected = true;
-										connectedToTarget = true;
-										break;
-									}
-								}
-								if (!multiMode && srcConnected) break;
-							}
-						}
-					}
-
-					if (!connectedToTarget && connectionsCount === 0) {
-						const chainNodes = [...orderedNodes].sort((a, b) => a.pos[0] - b.pos[0]);
-						for (let n = 0; n < chainNodes.length - 1; n++) {
-							const src = chainNodes[n];
-							const dst = chainNodes[n + 1];
-							if (!src || !dst || !src.outputs || !dst.inputs) continue;
-							let pairConnected = false;
-
-							for (let oi = 0; oi < src.outputs.length; oi++) {
-								const output = src.outputs[oi];
-								if (!output) continue;
-
-								for (let ii = 0; ii < dst.inputs.length; ii++) {
-									const input = dst.inputs[ii];
-									if (!input || input.link != null) continue;
-
-									if (GeometryUtils.areTypesCompatible(output.type, input.type)) {
-										src.connect(oi, dst, ii);
-										connectionsCount++;
-										pairConnected = true;
-										break;
-									}
-								}
-								if (!multiMode && pairConnected) break;
-							}
-						}
-					}
-
-					if (connectionsCount > 0) {
+					const nodes = ImissNukeManager.getOrderedSelectedNodes(canvas);
+					if (nodes.length < 2) return;
+					const multi = !!(window.__imissNukeConfig && window.__imissNukeConfig.multiAutoConnect);
+					if (ImissNukeManager.smartConnect(nodes, multi) > 0) {
 						canvas.setDirty(true, true);
-						graph.change();
+						if (graph && graph.change) graph.change();
 					}
 					return;
 				}
@@ -5936,32 +6070,33 @@
 	 *
 	 * El chip es el de la H: 32 px, radio 8, gris apagado; prendido, la marca
 	 * en color sobre un fondo oscuro teñido (la H es amarilla sobre ciruela, la
-	 * N es ámbar Nuke sobre café). La marca está hecha igual que la de la H —
-	 * las mismas barras y el mismo polvo de pixeles, en espejo — para que se
-	 * lean como hermanas en la barra. El panel es el de Hotbox Settings: grid
+	 * N es naranja sobre café). La marca es la del kit de marca de Jorge
+	 * (assets/brand, "Minilogo"): la N dentro de un pipe con el codo a 45° de
+	 * Nuke, dos salidas a la izquierda y el slot a la derecha, en el naranja
+	 * de la marca #E58A2E. El panel es el de Hotbox Settings: grid
 	 * con ícono por fila, botones ● / ○, botones que ciclan con puntitos, y
 	 * Done abajo. Clic derecho en la N prende o apaga todo, como la H.
 	 * ===================================================================== */
-	const IN_LOGO = { bg: '#2a1d13', fg: '#F39C3D' };
+	const IN_LOGO = { bg: '#2a1d13', fg: '#E58A2E' };
+	// assets/brand/svg/imissnuke-mark-orange.svg, in currentColor
 	const IN_MARK =
+		'<g fill="currentColor">' +
 		'<rect x="11.5" y="10.5" width="3" height="11" rx="1"/><rect x="17.5" y="10.5" width="3" height="11" rx="1"/>' +
-		'<polygon points="11.8,10.5 14.8,10.5 20.2,21.5 17.2,21.5"/>' +
-		'<rect x="21.7" y="3.9" width="4.8" height="3.2" rx="1.2"/><rect x="8.6" y="3.5" width="2.6" height="2.6" rx="0.8"/><rect x="16.9" y="7.1" width="1.4" height="1.4" rx="0.45"/>' +
-		'<rect x="8.6" y="9.2" width="1.2" height="1.2" rx="0.4"/><rect x="2.8" y="8.3" width="1.8" height="1.8" rx="0.55"/><rect x="27.6" y="10.5" width="1.6" height="1.6" rx="0.5"/>' +
-		'<rect x="24.1" y="15.8" width="1.6" height="1.6" rx="0.5"/><rect x="2" y="12.7" width="3.2" height="4.8" rx="1.2"/><rect x="4" y="19" width="2.8" height="2.8" rx="0.85"/>' +
-		'<rect x="2.2" y="22.8" width="1.6" height="1.6" rx="0.5"/><rect x="27.3" y="22.5" width="3" height="3" rx="0.9"/><rect x="20.1" y="23.9" width="1.4" height="1.4" rx="0.45"/>' +
-		'<rect x="12.45" y="25.1" width="4.5" height="3" rx="1.1"/><rect x="18.7" y="27.9" width="1.8" height="1.8" rx="0.55"/><rect x="8.1" y="24.1" width="1.2" height="1.2" rx="0.4"/>';
+		'<path d="M11.5 11.6Q11.5 10.5 12.6 10.5L14.6 10.5L20.5 20.4Q20.5 21.5 19.4 21.5L17.4 21.5Z"/>' +
+		'<rect x="3" y="3.5" width="7" height="3" rx="1.1"/><rect x="3" y="25.5" width="7" height="3" rx="1.1"/>' +
+		'<circle cx="27.5" cy="16" r="1"/></g>' +
+		'<path d="M10 5H24L27.5 8.5V23.5L24 27H10" fill="none" stroke="currentColor" stroke-width="0.9" stroke-linejoin="miter"/>';
 
 	// The bare mark in currentColor (the top-bar button paints the chip around it)
 	function inMarkSVG(size) {
-		return `<svg viewBox="0 0 32 32" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${IN_MARK}</svg>`;
+		return `<svg viewBox="0 0 32 32" width="${size}" height="${size}" aria-hidden="true">${IN_MARK}</svg>`;
 	}
 
 	// The full chip, for the panel header
 	function inLogoChip(size) {
 		return `<svg viewBox="0 0 32 32" width="${size}" height="${size}" aria-hidden="true" style="display:block;flex:none">`
 			+ `<rect x="1" y="1" width="30" height="30" rx="6" fill="${IN_LOGO.bg}"/>`
-			+ `<g fill="${IN_LOGO.fg}" transform="translate(3.52 3.52) scale(0.78)">${IN_MARK}</g></svg>`;
+			+ `<g style="color:${IN_LOGO.fg}" transform="translate(3.52 3.52) scale(0.78)">${IN_MARK}</g></svg>`;
 	}
 
 	// Stroke icons, same set and drawing as the Hotbox's
@@ -6277,7 +6412,7 @@
 				[['Alt', 'H'], 'Hide inputs / Set & Get links'],
 				[['Ctrl', 'D'], 'Duplicate without links'],
 				[['Ctrl', 'E'], 'Clone with its input links'],
-				[['Shift', 'Q'], 'Connect the selection to the last selected node'],
+				[['Shift', 'Q'], 'Connect the selection into the node on the right: image or video first, never into a widget'],
 				[['Ctrl', 'Shift', 'C'], 'Color palette for nodes and groups'],
 				[['Ctrl', 'Shift', 'X'], 'Extract a node and bridge its wires (two nodes: swap them)'],
 				[['Ctrl', 'Shift', 'S'], 'Swap / replace a node'],
