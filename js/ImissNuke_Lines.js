@@ -1,16 +1,15 @@
 /**
  * ============================================================================
- * ImissNuke - Nuke Pipe Lines & Flow Direction Arrows Engine
+ * ImissNuke - Nuke Pipe Lines Engine
  * ============================================================================
  * Clean, high-performance rendering engine integrating QuickConnections MapLinks:
  *  - Faithful QuickConnections MapLinks obstacle avoidance and output bundling
  *  - Intercepts renderLink, drawLink, and drawConnections across all LiteGraph targets
  *  - 45° and 90° beveled bends with quadratic fillet corners
- *  - Default wire: Pure Nuke Black (#000000)
- *  - Selection wire: Foundry Nuke Amber (#e58c2c) or White (#ffffff)
- *  - Original Colors: Dynamic ComfyUI slot type colors (IMAGE, MODEL, CLIP, LATENT, etc.)
- *  - Pipe Thickness: 3-option selector (Thin 1.5px | Medium 2.5px | Thick 4.0px)
- *  - Arrows: Single prominent arrow touching the outer rim of the input slot circle
+ *  - Wire color (the panel's one setting here): Original Colors (ComfyUI slot
+ *    type colors, the default) or Nuke Black (#000000)
+ *  - Wires into the selection: Foundry Nuke Amber (#e58c2c)
+ *  - Fixed since v2 (2026-11-08): medium pipe (2.5px), no flow arrows
  *  - Zero glow / zero shadowBlur at all times
  * ============================================================================
  */
@@ -108,14 +107,11 @@
 		return window.__imissNukeConfig || {
 			masterEnabled: true,
 			nukeLinesEnabled: true,
-			nukeArrowsEnabled: false,
 			nukeHighlightSelected: true,
 			pipeStyle: 'beveled',
 			lineColorMode: 'original',
 			selectionColorMode: 'amber',
 			pipeCornerRadius: 7,
-			arrowStyle: 'triangle',
-			arrowSize: 12,
 			pipeWidth: 2.5,
 			avoidNodes: true,
 			highlightUpstreamOnly: true
@@ -1137,39 +1133,6 @@
 			ctx.stroke();
 			ctx.closePath();
 
-			/* ---- FLOW ARROW: AT THE INPUT SLOT, AND IT ROTATES -----------
-			 * Where it sits was never the problem — it belongs on the socket it
-			 * points into. What was stuck was the ANGLE: it came from the last
-			 * two points of the path, and the router finishes every wire with a
-			 * short horizontal stub into the socket. So `atan2` answered 0 on
-			 * every link in the graph and every arrow pointed right, whatever
-			 * direction the wire had actually arrived from — a row of identical
-			 * glyphs that never turned when you moved a node.
-			 *
-			 * ⚑ So the angle is taken from the last stretch of wire that is
-			 * LONG ENOUGH TO HAVE A DIRECTION (see `approachAngle`): the entry
-			 * stub is stepped over, a wire coming down turns the arrow down,
-			 * and a horizontal approach still reads 0 — which is what it always
-			 * should have read, for the right reason.
-			 */
-			if (cfg.nukeArrowsEnabled !== false && inputPos) {
-				const arrowSize = cfg.arrowSize || 12;
-				const arrowStyle = cfg.arrowStyle || 'triangle';
-				const angle = NukePipeRenderer.approachAngle(path, arrowSize);
-
-				if (angle !== null) {
-					NukePipeRenderer.renderSingleArrow(
-						ctx,
-						inputPos[0],
-						inputPos[1],
-						angle,
-						arrowSize,
-						pipeColor,
-						arrowStyle
-					);
-				}
-			}
-
 			ctx.restore();
 		}
 
@@ -1216,82 +1179,6 @@
 				ctx.lineTo(x2, y2);
 			}
 			ctx.stroke();
-			ctx.restore();
-		}
-
-		/* ---- WHICH WAY THE WIRE IS ACTUALLY ARRIVING FROM ----------------
-		 * The direction of the last stretch of pipe that is at least `minDist`
-		 * long, walking backwards from the socket.
-		 *
-		 * ⚑⚑ THE LAST TWO POINTS ARE NOT A DIRECTION. The router ends every
-		 * wire with a short horizontal stub into the socket (and can repeat the
-		 * final point outright, which is `atan2(0, 0)` = 0). Reading those gave
-		 * the same angle on every link in the graph — the arrows never turned,
-		 * which is exactly what they looked like.
-		 *
-		 * ⚑ Walking back until the span is worth an arrow's length is what
-		 * makes it turn: a wire dropping into a socket from above answers
-		 * -90°, one arriving flat still answers 0.
-		 * ⚑ `null` when the whole path has no length at all — a socket wired to
-		 * itself draws no arrow rather than a glyph at an invented angle.
-		 */
-		static approachAngle(path, minDist) {
-			const n = path ? path.length : 0;
-			if (n < 2) return null;
-			const end = path[n - 1];
-			const min2 = (minDist || 12) * (minDist || 12);
-
-			for (let i = n - 2; i >= 0; i--) {
-				const dx = end[0] - path[i][0];
-				const dy = end[1] - path[i][1];
-				if (dx * dx + dy * dy >= min2) return Math.atan2(dy, dx);
-			}
-			// Shorter than an arrow from end to end: use everything there is.
-			const dx = end[0] - path[0][0];
-			const dy = end[1] - path[0][1];
-			return (dx || dy) ? Math.atan2(dy, dx) : null;
-		}
-
-		// ---- SINGLE PROMINENT ARROW AT TARGET ENTRANCE ----
-		static renderSingleArrow(ctx, targetX, targetY, angle, size, color, style) {
-			const slotRadius = 5.5; // ComfyUI slot circle radius
-			const tipX = targetX - Math.cos(angle) * slotRadius;
-			const tipY = targetY - Math.sin(angle) * slotRadius;
-
-			ctx.save();
-			ctx.translate(tipX, tipY);
-			ctx.rotate(angle);
-			ctx.shadowBlur = 0;
-			ctx.shadowColor = 'transparent';
-
-			if (style === 'triangle') {
-				const backX = -size * 1.15;
-				const halfBase = size * 0.58;
-
-				ctx.beginPath();
-				ctx.moveTo(0, 0); // Tip touches outer rim of the slot circle
-				ctx.lineTo(backX, -halfBase);
-				ctx.lineTo(backX, halfBase);
-				ctx.closePath();
-
-				ctx.fillStyle = color;
-				ctx.fill();
-			} else {
-				const backX = -size * 1.1;
-				const wingY = size * 0.65;
-				const notchX = -size * 0.4;
-
-				ctx.beginPath();
-				ctx.moveTo(0, 0);
-				ctx.lineTo(backX, -wingY);
-				ctx.lineTo(notchX, 0);
-				ctx.lineTo(backX, wingY);
-				ctx.closePath();
-
-				ctx.fillStyle = color;
-				ctx.fill();
-			}
-
 			ctx.restore();
 		}
 	}

@@ -19,8 +19,12 @@
  *  - Ctrl + Shift + Drag Drop: Sustituir nodo al soltar sobre otro
  *  - Shift + R: Encolar / Renderizar nodos de salida seleccionados
  *  - MMB + LMB Drag (Wacom): Zoom interactivo suave continuo
- *  - Alt + MMB Drag sobre un nodo: Redimensionar (modificador elegible)
  *  - LMB Canvas Drag: Selección por caja (Box select)
+ *  - Shift + ↑: Seleccionar lo que alimenta a la selección
+ *  - L: Acomodar la selección (Layout)
+ *
+ * Settings: el panel de la N (v2, 2026-11-08) — pocos y con su frase; lo
+ * demás es fijo. Ver CONFIG abajo.
  * ============================================================================
  */
 
@@ -59,344 +63,98 @@
 	}());
 	window.__imissNukeIsLinux = IS_LINUX;   // para el check y para la consola
 
-	// Cómo se llama cada modificador del resize en el panel y en la guía de
-	// atajos. Una sola tabla: el pulldown y la guía tienen que decir lo mismo.
-	const MOD_LABELS = { alt: 'Alt', meta: 'Win', ctrl: 'Ctrl', shift: 'Shift' };
-
-	// ⚑⚑ THE QUIET DEFAULTS. Jorge: "dejar por default el switch off de los
-	// backdrops/groups… show arrows off, default wire color en original colors,
-	// ya que no quiero que los artistas sientan un cambio fuerte."
-	//
-	// A default only ever reaches somebody who has NEVER saved a config, and by
-	// the time this shipped the panel had already saved one for everyone who
-	// opened it once. So the three keys below are also re-defaulted, ONCE, and
-	// only where the stored value is still the one they used to ship with: a
-	// person who chose something else keeps exactly what they chose, and a
-	// person who later turns one back on keeps that too (the epoch is written
-	// back the moment it is applied — an epoch that is not stored is an epoch
-	// that runs again, and the second run would undo the artist).
-	//
-	// Bump DEFAULTS_EPOCH the next time a shipped default changes; the table is
-	// the whole record of what changed and what it changed FROM.
-	//
-	// ⚑⚑ CADA FILA DICE DESDE QUÉ EPOCH ES SUYA, y sólo corre para quien
-	// está por DEBAJO de ese número. Sin esa columna, subir el epoch por un
-	// default nuevo vuelve a aplicar TODOS los viejos — y el artista de
-	// Windows que había vuelto a prender los backdrops después del epoch 2 se
-	// los encuentra apagados otra vez. Es exactamente el daño contra el que
-	// avisa el párrafo de arriba, y hasta v17.56 la tabla no tenía con qué
-	// evitarlo: una sola fila nueva lo habría disparado.
-	//
-	// ⚑⚑ NO HAY FILA 3 Y EL NÚMERO SE QUEMA A PROPÓSITO. v17.56 gastó el epoch
-	// 3 apagando `tabForSearch` entero en Linux; v17.57 lo devolvió porque lo
-	// que estorbaba no era el hotkey sino la mitad que coloca y conecta. Un
-	// config que alcanzó a guardar el 3 tiene que seguir viendo la fila 4, así
-	// que el número no se recicla: reusarlo lo dejaría con Tab apagado para
-	// siempre. Una clave NUEVA (`tabAutoConnect`) no necesita fila ninguna —
-	// el `{...DEFAULT_CONFIG, ...parsed}` ya le da el default a quien no la
-	// tiene guardada; la tabla existe sólo para valores que YA están escritos.
-	const DEFAULTS_EPOCH = 8;
-	const REDEFAULTED = [
-		// desde, key,           what it used to ship as,  what it ships as now
-		[2, 'nukeGroupsEnabled', true,                     false],
-		[2, 'nukeArrowsEnabled', true,                     false],
-		[2, 'lineColorMode',     'nukeDark',               'original'],
-		// v17.57 — el hotkey vuelve a las dos máquinas. Le llega a quien lo
-		// tenga apagado, que hoy es exactamente quien lo apagó por este bug:
-		// o se lo apagó v17.56 en Linux, o lo apagó a mano porque los nodos le
-		// salían en otro lado. Las dos personas quieren el hotkey de vuelta
-		// ahora que la mitad culpable tiene su propio switch.
-		[4, 'tabForSearch',      false,                    true],
-		// ⚡ v17.84 (Jorge, con la ventana de settings abierta): "tab node
-		// search off por default por favor, al igual que los bloqueadores que
-		// te sacan los search... creo que ni funcionan tampoco, pero si
-		// quieres velos y déjamelos desactivados."
-		//
-		// ⚡⚡ Y LOS TRES CAEN BAJO LA REGLA QUE ESTE ARCHIVO YA TIENE ESCRITA,
-		// treinta líneas más abajo, sobre Performance: *un switch que sale
-		// PRENDIDO es esta herramienta decidiendo cómo se comporta el canvas de
-		// otra persona*. Los tres eran la excepción a esa regla y ninguno se
-		// había ganado el permiso: los dos bloqueadores parchan la superficie
-		// de litegraph 1.x (`processMouseDblClick`, `showSearchBox`,
-		// `showNodeSearchBox`, `release_link_on_empty_shows_menu`) y bajo Nodes
-		// 2.0 el buscador que intentan tapar lo abre la capa de Vue, que no
-		// pasa por ninguno de esos ganchos. O sea: prendidos de fábrica,
-		// tragándose eventos, para no bloquear nada.
-		//
-		// ⚡ Se apagan, no se borran. Quien los quiera puede prenderlos, y el
-		// día que alguien mida que sí funcionan en este frontend vuelven con
-		// una razón en vez de con una suposición.
-		[5, 'tabForSearch',              true,  false],
-		[5, 'disableDblClick',           true,  false],
-		[5, 'blockInputDisconnectSearch', true, false],
-		// ⚡⚡ v17.94 — Y VUELVE A PRENDERSE, PORQUE AHORA SÍ TIENE DÓNDE
-		// AGARRARSE. Jorge: "el block output search… eso es molesto, ¿hay
-		// alguna forma de que sí funcione? ¿todavía funciona? Digamos que si
-		// algo está conectado, quiero que si lo desconecta no se active el
-		// search node, porque sí es realmente molesto."
-		//
-		// ⚡⚡ v17.84 lo apagó con toda la razón — parchaba `showSearchBox` y
-		// compañía, que bajo Nodes 2.0 ya no son quienes abren el buscador — y
-		// eso no cambió: ese parche sigue ahí y sigue sin servir para esto. Lo
-		// que cambió es que ahora este switch maneja TAMBIÉN
-		// `setupLinkReleaseBlock`, que se cuelga de `LinkConnector.dropOnNothing`
-		// — el método por el que pasa el suelte de verdad. Medido en 1.52.7,
-		// no supuesto: ver el bloque de esa función.
-		//
-		// ⚡ Y por eso sí se gana el ON de fábrica que la regla de arriba pide:
-		// lo pidió el dueño del canvas, y ya hay una medición detrás.
-		[6, 'blockInputDisconnectSearch', false, true],
-		// ⚡⚡ Y SU PAREJA, por la misma razón y con la misma prueba.
-		// Jorge: "lo quiero prendido por default, ese que desconectas algo
-		// conectado y que no triggere el search."
-		//
-		// ⚡⚡ Y ÉSTE ES EL QUE HACE ESE TRABAJO, no el de arriba: medido en
-		// 1.52.7, desenchufar un INPUT ya salía limpio (el link trae
-		// `disconnectOnDrop`, se va de `renderLinks` y no queda qué
-		// anunciar). El que SÍ abre el buscador es jalar uno nuevo desde un
-		// output QUE YA TIENE cable — y eso es exactamente lo que este
-		// switch gobierna.
-		//
-		// ⚡ Su default siempre fue `true`, así que esta fila no es para el
-		// que nunca lo tocó: es para el que lo apagó ANTES de v17.94,
-		// cuando apagarlo no apagaba nada (gateaba el parche de litegraph
-		// 1.x, que bajo Nodes 2.0 no bloquea). Nadie puede haber elegido
-		// en contra de un efecto que no existía.
-		[6, 'searchOnlyEmptyOutput', false, true],
-		// ⚡⚡ v17.99 — Y SE APAGA OTRA VEZ, A PETICIÓN DEL MISMO DUEÑO DEL
-		// CANVAS. Jorge: "need the block search on connected slot off by
-		// default".
-		//
-		// ⚡ Esto NO deshace la medición de v17.94 ni el switch: el gancho
-		// sigue siendo `LinkConnector.dropOnNothing` y sigue funcionando. Lo
-		// que cambia es quién lo pide — y la regla de esta casa es que un
-		// switch sale APAGADO salvo que su dueño diga lo contrario. Lo dijo
-		// dos veces, en los dos sentidos, y la segunda es la que vale.
-		//
-		// ⚡ Fila nueva en vez de editar la 6: una fila que este config YA
-		// vivió no se vuelve a aplicar, así que borrar la 6 dejaría a quien ya
-		// la recibió con el valor viejo y sin manera de recibir el nuevo.
-		[7, 'searchOnlyEmptyOutput', true, false],
-		// ⚡⚡ v18.51 — EL TAB VUELVE A SALIR PRENDIDO, Y AHORA CON LA CAUSA
-		// ENCONTRADA. Jorge: "el tab del search sigue sin funcionar… ¿puedes
-		// dar otra vuelta en eso?". v17.84 lo apagó porque "ni funcionan":
-		// el nodo nacía lejos del cursor. Leído en el bundle del frontend
-		// 1.52.7 (GraphView, `getNewNodeLocation`): el buscador coloca el
-		// nodo en `[trigger.canvasX, trigger.canvasY]` — CAMELCASE — y el
-		// evento que este archivo le pasaba traía `canvasx`/`canvasy`. El nodo
-		// nacía en [undefined, undefined], o sea NaN, que es exactamente lo que
-		// el rescate de v17.61 estaba tapando. Con las dos llaves bien
-		// escritas (ver `fakeEvent` en setupTabSearch) el frontend lo pone en
-		// el cursor él solo, y el hotkey ya se gana su ON de fábrica.
-		[8, 'tabForSearch', false, true]
-	];
-
-	const DEFAULT_CONFIG = {
+	/* ---- CONFIG ---------------------------------------------------------------
+	 *
+	 * ⚑⚑ v2 (2026-11-08) — POCOS SETTINGS. Jorge: "quitar tantos settings y
+	 * dejar lo que tenemos por default… hay cosas que están outdated." Lo que un
+	 * artista puede cambiar es la lista corta de USER_DEFAULTS, y es TODO lo que
+	 * el panel enseña. Lo demás vive en FIXED con el valor con el que ya salía,
+	 * y no se guarda: un valor que no se escribe no se puede quedar viejo.
+	 *
+	 * ⚑ Se fueron, con su código: Mod+MMB resize (parked desde v17.57, congelaba
+	 * el canvas), el fondo de canvas (gate cerrado desde 2026-09-08), las flechas
+	 * (apagadas desde el epoch 2), Block Double-Click (parche de litegraph 1.x
+	 * que bajo Nodes 2.0 no bloqueaba nada), la fila de Nodes 2.0 (el Tab se
+	 * arregló en v18.51), el tamaño del panel, tres switches de Performance y la
+	 * tabla REDEFAULTED con sus 8 epochs. Todo está en el commit "Baseline" del
+	 * repo de ImissNuke.
+	 *
+	 * ⚑ LA ÚNICA DIFERENCIA DE SISTEMA QUE QUEDA: el auto-connect del Tab
+	 * (encadenar el nodo nuevo al seleccionado) sale OFF en Linux y ON en
+	 * Windows. Se partió en v17.57 para aislar "el nodo nace en otro lado"; las
+	 * dos causas de ese bug salieron después (v17.58: el comando toggle del
+	 * buscador; v18.51: `canvasX` en camelCase) y ninguna vivía en esta mitad,
+	 * pero nunca se ha medido prendido en Linux. Para probarlo allá sin switch,
+	 * en la consola (se lee en cada Tab, no hace falta recargar):
+	 *     __imissNukeConfig.tabAutoConnect = true
+	 * ------------------------------------------------------------------------- */
+	const USER_DEFAULTS = {
 		masterEnabled: true,
-		panelScale: 1.15,
-		// ⚑⚑ EL TAB SON DOS COSAS Y SÓLO UNA ESTABA MAL. Jorge, corrigiendo el
-		// primer intento: "para la Linux y Windows sí dejar el tab search como
-		// hotkey para que salga el buscador. Ahora la parte que no funciona es
-		// la parte del tab search que conecta, ¿por qué es la que hace que los
-		// nodos aparezcan en otro lado? Entonces déjame un toggle nuevo que me
-		// deje eso apagado en Linux y prendido en Windows, pero ambos con el
-		// hotkey de Tab, y así ya tenemos segmentado el error."
-		//
-		//   tabForSearch  — la tecla abre el buscador donde está el cursor.
-		//                   PRENDIDO en las dos. Es lo que nadie discutió.
-		//   tabAutoConnect— lo que pasa DESPUÉS de que el nodo nace: moverlo a
-		//                   donde apretaste y encadenarlo al seleccionado.
-		//                   Esa es la mitad que en Linux lo pone en otro lado.
-		//
-		// ⚑ Separarlas no es cosmético: es lo que convierte "Tab está roto" en
-		// una pregunta que se puede contestar. Con el hotkey prendido y la
-		// cadena apagada, si el nodo SIGUE naciendo lejos del cursor entonces
-		// el culpable nunca fue este archivo — es el frontend colocándolo —, y
-		// si nace bien, el defecto está en la mitad de abajo y ya sabemos en
-		// cuál. Un switch que parte el síntoma vale más que un arreglo a ciegas.
-		// ⚡ v17.84 — APAGADO de fábrica (ver la fila 5 de REDEFAULTED). Lo
-		//   de arriba sigue siendo cierto y por eso no se borró nada: el
-		//   hotkey funciona y está partido en tres switches. Lo que cambió es
-		//   quién decide, y de fábrica esta herramienta no le quita el Tab a
-		//   ComfyUI.
-		// ⚡⚡ v18.51 — PRENDIDO otra vez (fila 8): la causa de "no funciona"
-		//   era el evento con `canvasx` en minúsculas, y ya está arreglada.
+		dKeyMode: 'bypass',            // 'bypass' | 'mute'
+		nukeLinesEnabled: true,
+		lineColorMode: 'original',     // 'original' (slot type colors) | 'nukeDark'
+		nukeGroupsEnabled: false,      // false = ComfyUI draws its own groups, untouched
+		blockOutputDropSearch: false,  // true = an output wire dropped on empty canvas opens nothing
+		perfSquareCorners: false       // LiteGraph.ROUND_RADIUS -> 0
+	};
+
+	const FIXED = {
+		// Workflow
 		tabForSearch: true,
-		/* ⚑⚑ v17.60 — Y LA MITAD DE ABAJO ERAN DOS MITADES TAMBIÉN.
-		 *
-		 * Jorge pegó el stack trace de la advertencia, y **cambia el
-		 * diagnóstico entero**:
-		 *
-		 *     The trigger event was undefined when addNode was called.
-		 *       addNode  @ GraphView-….js
-		 *       emit     @ vendor-vue-core-….js
-		 *       onClick  @ GraphView-….js        <-- un click de VERDAD
-		 *       invoker  @ vendor-vue-core-….js
-		 *
-		 * Ese `invoker → onClick` es Vue atendiendo un click real sobre un
-		 * resultado del buscador. O sea **la advertencia la emite ComfyUI en su
-		 * propio camino**, y Jorge la vio con el Tab APAGADO, usando el doble
-		 * click de la casa. No la causamos nosotros y v17.58 se la atribuyó al
-		 * camino del comando: eso estaba mal y aquí queda corregido.
-		 *
-		 * Lo que sí deja demostrado es lo que el experimento de v17.57 fue a
-		 * buscar: **el frontend pone el nodo en el centro por su cuenta.** Y si
-		 * el frontend es quien lo pone mal, entonces la mitad de ImissNuke que
-		 * lo MUEVE al cursor no es el culpable — **es el arreglo**, y llevaba
-		 * apagada en Linux desde v17.57 por ir en el mismo switch que la que sí
-		 * estaba en duda.
-		 *
-		 * Así que se parten, por tercera vez en esta saga y por la misma razón:
-		 *
-		 *   tabPlaceAtCursor — mueve el nodo recién creado a donde apretaste
-		 *                      Tab. **ON en las dos.** Compensa al frontend.
-		 *   tabAutoConnect   — lo encadena al nodo seleccionado. Sigue OFF en
-		 *                      Linux, tal como Jorge lo pidió, porque de ésa
-		 *                      todavía no hay medición.
-		 *
-		 * ⚑ Un switch que apaga dos cosas no mide ninguna. Van tres. */
 		tabPlaceAtCursor: true,
 		tabAutoConnect: !IS_LINUX,
-		nukeInstantPlacement: true,        // Place newly created nodes immediately adjacent without ghost/click confirmation
-		// ⚡⚡ v17.84 — LOS DOS BLOQUEADORES, APAGADOS. Parchan litegraph 1.x
-		//   (`processMouseDblClick` y los `showSearchBox` / `showNodeSearchBox`
-		//   / `release_link_on_empty_shows_menu` alrededor de `processMouseUp`)
-		//   y bajo Nodes 2.0 el buscador lo abre Vue, que no pasa por ahí. Así
-		//   que de fábrica no se traga eventos para no bloquear nada.
-		disableDblClick: false,
-		// ⚡ v17.94 — este switch maneja DOS parches: el viejo de litegraph 1.x
-		// (que bajo Nodes 2.0 no bloquea nada) y `setupLinkReleaseBlock`, que
-		// sí. Prendido de fábrica desde la fila 6 de REDEFAULTED.
-		blockInputDisconnectSearch: true,  // Block the search/context menu when you UNPLUG a wire and drop it on empty canvas
-		blockOutputDropSearch: false,      // Block search when dragging an output wire into empty canvas (when false, opens modern search & auto-connects)
-		searchOnlyEmptyOutput: false,      // ⚡ v17.99 — OFF de fábrica (fila 7). When dropping an output wire, only open search if the output slot currently has zero connections
+		nukeInstantPlacement: true,
+		blockInputDisconnectSearch: true,
+		searchOnlyEmptyOutput: false,
 		lmbBoxSelect: true,
 		nukeWacomZoom: true,
-		/* ⚡⚡ v17.86 — SHIFT + ↑ SELECCIONA LO QUE ALIMENTA A LO SELECCIONADO.
-		 *
-		 * Jorge pidió "un hotkey shift up arrow para seleccionar los nodos de
-		 * arriba", y "arriba" tenía dos lecturas que dan teclas distintas: los
-		 * que están físicamente encima en el canvas, o los que están RÍO ARRIBA
-		 * en el flujo. Contestó él: **"es a lo que esté conectado"**. Así que
-		 * es el DAG, no la geometría — que además es lo que "arriba" significa
-		 * en Nuke, de lo que trata este archivo entero.
-		 *
-		 * ⚡ UN SALTO POR PRESIÓN, y esa es toda la forma del gesto: agrega los
-		 * que entran DIRECTO a lo que ya tienes. Vuelve a apretarlo y sube otro
-		 * nivel, y otro — así la misma tecla contesta "lo que me alimenta" y
-		 * "toda la rama de arriba" sin tener que escoger una de las dos al
-		 * escribirla. Un hotkey que se traga el árbol entero de un golpe no
-		 * tiene cómo darte los dos primeros.
-		 *
-		 * ⚡⚡ Y NACE PRENDIDO PORQUE NO LE QUITA LA TECLA A NADIE. La regla de
-		 * la casa es que un switch que sale prendido es esta herramienta
-		 * decidiendo por el canvas de otro — por eso `tabForSearch` nació
-		 * apagado: Tab YA hacía algo en ComfyUI. Éste no consume el evento
-		 * cuando no tiene nada que agregar (ver `selectUpstream`), que es la
-		 * misma salida que la L usa desde que existe: sin selección, o sin
-		 * nada conectado arriba, la flecha sigue de largo entera. */
 		nukeSelectUpstream: true,
-		// ⚑⚑ APAGADO, y no borrado. Jorge lo probó en cuanto salió: "déjame el
-		// resize mode apagado, no funciona, como que se queda todo loqueado, no
-		// sé por qué el nodo y todo me aparece en el mismo lugar... mejor no le
-		// movamos más y apaguemos eso también, luego lo vemos."
-		//
-		// Apagado quiere decir INERTE: el único listener que puede armar el
-		// gesto pregunta por este switch antes de tocar nada (`armed()`), así
-		// que con esto en false no se guarda estado, no se traga ningún evento
-		// y el botón de en medio vuelve entero al zoom y al paneo. Se queda en
-		// el panel porque el día que lo veamos, lo que hay que poder hacer es
-		// prenderlo y reproducirlo — no volver a escribirlo.
-		nukeModResize: false,         // modifier + MMB drag over a node = resize it
-		nukeModResizeKey: 'alt',      // 'alt' | 'meta' (Windows key) | 'ctrl' | 'shift'
-		dKeyMode: 'bypass', // 'bypass' or 'mute'
 		multiAutoConnect: false,
-
-		// Nuke Pipes & Flow Direction Arrows
-		nukeLinesEnabled: true,
-		nukeArrowsEnabled: false,    // ⚑ off out of the box — see REDEFAULTED
+		// Pipes
 		nukeHighlightSelected: true,
-		pipeStyle: 'beveled',        // 'beveled' (QuickConnections 45°), 'curved' (90° fillet), 'orthogonal', 'straight'
-		lineColorMode: 'original',   // 'nukeDark' (Nuke Black #000000), 'original' (ComfyUI Slot Type Colors)
-		selectionColorMode: 'amber', // 'amber' (Foundry Nuke #e58c2c), 'white' (#ffffff)
+		pipeStyle: 'beveled',
+		selectionColorMode: 'amber',
 		pipeCornerRadius: 7,
-		arrowStyle: 'triangle',      // 'triangle' (like Foundry Nuke), 'chevron'
-		arrowSize: 12,
 		pipeWidth: 2.5,
 		avoidNodes: true,
 		highlightUpstreamOnly: true,
-
-		// Nuke Canvas Background Override
-		nukeBgEnabled: false,
-		nukeBgStyle: 'flat',         // 'flat' (Nuke DAG gray) or 'dots' (with faint white dots)
-		nukeBgColor: '#616161',      // Flat gray computed from nukeBgGrayLevel
-		nukeBgGrayLevel: 38,         // Gray tone slider 12% to 85% (default 38% = authentic Nuke DAG gray #616161)
-		nukeBgDotOpacity: 0.22,      // Dot intensity / opacity
- 
-		// Nuke Backdrops / Groups
-		nukeGroupsEnabled: false,         // false = ComfyUI draws its own groups, untouched
-		defaultBackdropStyle: 'normal',   // 'normal' (Fill: v18.86 = the Pixaroma group — coloured header, dark body, round corners, yellow when selected) or 'border' (hollow outline with corner cutouts)
-		defaultBackdropFontSize: 24,      // Small: 18, Medium: 28, Large: 42
-
-		// Performance — every one of them OFF, which means "change nothing".
-		// A switch that ships ON is this tool deciding how somebody else's
-		// canvas looks, and the quiet-defaults rule above says it does not.
-		perfNoShadows: false,        // canvas.render_shadows
-		perfNoLinkBorders: false,    // canvas.render_connections_border
-		perfSquareCorners: false,    // LiteGraph.ROUND_RADIUS -> 0
-		perfNoInfo: false,           // canvas.render_info (the corner overlay)
-
-		__defaultsEpoch: DEFAULTS_EPOCH   // never a setting, only a watermark
+		// Backdrops
+		defaultBackdropStyle: 'normal',
+		defaultBackdropFontSize: 24
 	};
 
+	// ⚑ Llave nueva: la v9 se queda intacta, así que volver al ImissNuke
+	// anterior devuelve el config de antes tal cual.
+	const STORE_KEY = 'imissnuke_settings_v10';
+
 	function loadConfig() {
+		let saved = null, migrated = false;
 		try {
-			const saved = localStorage.getItem('imissnuke_config_v9') || localStorage.getItem('imissnuke_config_v8') || localStorage.getItem('imissnuke_config_v7') || localStorage.getItem('imissnuke_config_v6') || localStorage.getItem('imissnuke_config_v5') || localStorage.getItem('imissnuke_config_v4');
-			if (saved) {
-				const parsed = JSON.parse(saved);
-				// Migration: if user had disableDropMenu, map it
-				if (parsed.disableDropMenu !== undefined) {
-					if (parsed.blockInputDisconnectSearch === undefined) {
-						parsed.blockInputDisconnectSearch = parsed.disableDropMenu;
-					}
-					if (parsed.blockOutputDropSearch === undefined) {
-						parsed.blockOutputDropSearch = false;
-					}
-				}
-				if (parsed.nukeInstantPlacement === undefined) {
-					parsed.nukeInstantPlacement = true;
-				}
-				if (parsed.searchOnlyEmptyOutput === undefined) {
-					// ⚡ v17.99 — sigue al default de hoy, que es OFF. Un config
-					// viejo sin la llave no puede recibir un valor que nadie eligió.
-					parsed.searchOnlyEmptyOutput = false;
-				}
-				if (parsed.nukeBgGrayLevel === undefined || parsed.nukeBgGrayLevel === 20) {
-					parsed.nukeBgGrayLevel = 38;
-				}
-				const merged = { ...DEFAULT_CONFIG, ...parsed };
-				// ⚑ PARSED, not merged: the merge has already taken DEFAULT_CONFIG's
-				// epoch, so asking the merged object is asking today what today is.
-				const bornAt = parsed.__defaultsEpoch || 1;
-				if (bornAt < DEFAULTS_EPOCH) {
-					// ⚑ `since > bornAt`: una fila que este config YA vivió no se
-					// vuelve a aplicar. Sin eso, el epoch nuevo desharía al artista
-					// que cambió de opinión después del anterior.
-					for (const [since, key, was, now] of REDEFAULTED) {
-						if (since > bornAt && merged[key] === was) merged[key] = now;
-					}
-					merged.__defaultsEpoch = DEFAULTS_EPOCH;
-					saveConfig(merged);
-				}
-				return merged;
+			let raw = localStorage.getItem(STORE_KEY);
+			if (!raw) {
+				// Una sola vez: del config viejo sólo pasan las llaves que
+				// siguen siendo settings; todo lo demás ahora es FIXED.
+				raw = localStorage.getItem('imissnuke_config_v9');
+				migrated = !!raw;
 			}
-		} catch (e) {}
-		return { ...DEFAULT_CONFIG };
+			if (raw) saved = JSON.parse(raw);
+		} catch (e) { saved = null; }
+		const user = { ...USER_DEFAULTS };
+		if (saved && typeof saved === 'object') {
+			for (const k of Object.keys(USER_DEFAULTS)) {
+				if (typeof saved[k] === typeof USER_DEFAULTS[k]) user[k] = saved[k];
+			}
+		}
+		const cfg = { ...user, ...FIXED };
+		if (migrated) saveConfig(cfg);
+		return cfg;
 	}
 
 	function saveConfig(cfg) {
+		const out = {};
+		for (const k of Object.keys(USER_DEFAULTS)) out[k] = cfg[k];
 		try {
-			localStorage.setItem('imissnuke_config_v9', JSON.stringify(cfg));
+			localStorage.setItem(STORE_KEY, JSON.stringify(out));
 		} catch (e) {}
 	}
 
@@ -516,227 +274,6 @@
 			} catch (e) {}
 
 			return false;
-		}
-	}
-
-	// ---- NUKE CANVAS BACKGROUND OVERRIDE ENGINE ----
-	class NukeCanvasBackground {
-		static get DEFAULT_GRID_IMAGE() {
-			return (typeof LGraphCanvas !== 'undefined' && LGraphCanvas.DEFAULT_BACKGROUND_IMAGE) ?
-				LGraphCanvas.DEFAULT_BACKGROUND_IMAGE :
-				'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAQBJREFUeNrs1rEKwjAUhlETUkj3vP9rdmr1Ysammk2w5wdxuLgcMHyptfawuZX4pJSWZTnfnu/lnIe/jNNxHHGNn//HNbbv+4dr6V+11uF527arU7+u63qfa/bnmh8sWLBgwYJlqRf8MEptXPBXJXa37BSl3ixYsGDBMliwFLyCV/DeLIMFCxYsWLBMwSt4Be/NggXLYMGCBUvBK3iNruC9WbBgwYJlsGApeAWv4L1ZBgsWLFiwYJmCV/AK3psFC5bBggULloJX8BpdwXuzYMGCBctgwVLwCl7Be7MMFixYsGDBsu8FH1FaSmExVfAxBa/gvVmwYMGCZbBg/W4vAQYA5tRF9QYlv/QAAAAASUVORK5CYII=';
-		}
-
-		static init(canvas) {
-			// IMISSNUKE_BG_GATE: shut = the canvas is never touched at all.
-			if (!bgAllowed()) return;
-			const cfg = window.__imissNukeConfig;
-			NukeCanvasBackground.patchCanvas();
-			if (canvas) {
-				NukeCanvasBackground.applyStyle(canvas, cfg);
-			}
-		}
-
-		/**
-		 * Undo EXACTLY what the ON path did, and nothing else.
-		 *
-		 * The ON path paints with `onRenderBackground` plus three inline
-		 * styles. It never assigns `clear_background_color` or
-		 * `background_image` — so OFF has nothing to put back there, and the
-		 * old code that wrote a hardcoded '#202020' and LiteGraph's grid
-		 * image was not restoring anything: it was overwriting whatever the
-		 * frontend itself was using, which is why the canvas went black on a
-		 * ComfyUI whose background does not come from those two properties.
-		 * (On this Windows install it happens to be '#222222', a plain hex,
-		 * which is why the same build looked right here and black there.)
-		 */
-		static restoreOriginal(canvas) {
-			if (!canvas) return;
-			if (canvas.onRenderBackground) {
-				delete canvas.onRenderBackground;
-			}
-			canvas.__imissNukeBgSig = '';
-			canvas.dirty_bgcanvas = true;
-			canvas.dirty_canvas = true;
-		}
-
-		static getBgColor(cfg) {
-			const level = (cfg && cfg.nukeBgGrayLevel !== undefined) ? cfg.nukeBgGrayLevel : 38;
-			const v = Math.max(12, Math.min(235, Math.round(255 * (level / 100))));
-			const hex = v.toString(16).padStart(2, '0');
-			return `#${hex}${hex}${hex}`;
-		}
-
-		static applyStyle(canvas, cfg) {
-			if (!bgAllowed()) return;                 // IMISSNUKE_BG_GATE
-			const fgCanvas = canvas?.canvas || document.querySelector('canvas.graphcanvas') || document.querySelector('canvas');
-			const bgCanvas = canvas?.bgcanvas;
-			const parent = fgCanvas?.parentElement;
-
-			if (cfg && cfg.masterEnabled !== false && cfg.nukeBgEnabled) {
-				const bgColor = NukeCanvasBackground.getBgColor(cfg);
-				if (fgCanvas) {
-					fgCanvas.style.backgroundColor = 'transparent';
-					fgCanvas.style.backgroundImage = 'none';
-				}
-				if (bgCanvas) {
-					bgCanvas.style.backgroundColor = bgColor;
-					bgCanvas.style.backgroundImage = 'none';
-				}
-				if (parent) {
-					parent.style.backgroundColor = bgColor;
-				}
-				if (canvas) {
-					canvas.dirty_bgcanvas = true;
-					canvas.dirty_canvas = true;
-				}
-			} else {
-				// Give the three inline styles back to the stylesheet, drop the
-				// painter, and touch nothing else. See restoreOriginal.
-				if (fgCanvas) {
-					fgCanvas.style.backgroundColor = '';
-					fgCanvas.style.backgroundImage = '';
-				}
-				if (bgCanvas) {
-					bgCanvas.style.backgroundColor = '';
-					bgCanvas.style.backgroundImage = '';
-				}
-				if (parent) {
-					parent.style.backgroundColor = '';
-				}
-				NukeCanvasBackground.restoreOriginal(canvas);
-			}
-		}
-
-		static patchCanvas() {
-			if (!bgAllowed()) return;                 // IMISSNUKE_BG_GATE
-			if (typeof LGraphCanvas === 'undefined' || !LGraphCanvas.prototype) return;
-
-			const targets = [LGraphCanvas.prototype];
-			if (typeof app !== 'undefined' && app.canvas) {
-				targets.push(app.canvas);
-				const p = Object.getPrototypeOf(app.canvas);
-				if (p && !targets.includes(p)) targets.push(p);
-			}
-
-			for (const target of targets) {
-				if (!target) continue;
-				const origDrawBackCanvas = target.drawBackCanvas;
-				if (typeof origDrawBackCanvas !== 'function' || origDrawBackCanvas.__imissNukeBgPatched) continue;
-
-				const patched = function () {
-					const cfg = window.__imissNukeConfig;
-					const on = !!(cfg && cfg.masterEnabled !== false && cfg.nukeBgEnabled);
-
-					// This runs on EVERY redraw, so it does the least it can:
-					// a signature compare, and work only when the answer moved.
-					// It used to re-read four strings and allocate a fresh
-					// closure per frame, on the canvas's own paint path.
-					const sig = on ? (NukeCanvasBackground.getBgColor(cfg) + '|' + (cfg.nukeBgStyle || 'flat')) : '';
-					if (sig !== this.__imissNukeBgSig) {
-						this.__imissNukeBgSig = sig;
-						if (on) {
-							const self = this;
-							const bgColor = NukeCanvasBackground.getBgColor(cfg);
-							// Assigned on the instance so LiteGraph's drawBackCanvas sees a painter
-							this.onRenderBackground = function (canvas, ctx) {
-								const targetCanvas = canvas || self.bgcanvas;
-								const targetCtx = ctx || self.bgctx;
-								if (targetCanvas && targetCtx) {
-									targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-									targetCtx.fillStyle = bgColor;
-									targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
-
-									const c = window.__imissNukeConfig;
-									if (c && c.nukeBgStyle === 'dots') {
-										NukeCanvasBackground.renderDots(self, targetCtx, targetCanvas.width, targetCanvas.height, c);
-									}
-									return true;
-								}
-								return false;
-							};
-						} else if (this.onRenderBackground) {
-							delete this.onRenderBackground;
-						}
-					}
-					return origDrawBackCanvas.apply(this, arguments);
-				};
-
-				patched.__imissNukeBgPatched = true;
-				patched.__origDrawBackCanvas = origDrawBackCanvas;
-				target.drawBackCanvas = patched;
-			}
-		}
-
-		static renderDots(canvasInstance, ctx, width, height, cfg) {
-			const ds = canvasInstance.ds;
-			const scale = ds ? ds.scale : 1.0;
-			const offsetX = ds ? ds.offset[0] * scale : 0;
-			const offsetY = ds ? ds.offset[1] * scale : 0;
-
-			let step = 30 * scale;
-			if (step < 14) {
-				step *= 2;
-			}
-			if (step < 14) return;
-
-			const startX = ((offsetX % step) + step) % step;
-			const startY = ((offsetY % step) + step) % step;
-			const dotOpacity = (cfg.nukeBgDotOpacity !== undefined) ? cfg.nukeBgDotOpacity : 0.18;
-			const dotR = Math.max(1, Math.min(2, 1.2 * Math.sqrt(scale)));
-
-			ctx.save();
-			ctx.fillStyle = `rgba(255, 255, 255, ${dotOpacity})`;
-			ctx.beginPath();
-			for (let x = startX; x < width; x += step) {
-				const rx = Math.round(x);
-				for (let y = startY; y < height; y += step) {
-					ctx.rect(rx - dotR, Math.round(y) - dotR, dotR * 2, dotR * 2);
-				}
-			}
-			ctx.fill();
-			ctx.restore();
-		}
-	}
-
-	/* =====================================================================
-	 * IMISSNUKE_BG_GATE — the canvas background is OFF for this studio.
-	 * 2026-09-08 · pitchblack prod · Jorge: "si siempre no funciona el BG,
-	 * entonces pues sí déjalo desactivado."
-	 *
-	 * ⚑⚑ THIS IS A DECISION, AND IT IS NOT THE SAME AS "IT IS BROKEN". It was
-	 * tried both ways on purpose. One real bug came out of it and is fixed and
-	 * staying fixed: the OFF path used to write a hardcoded '#202020' and
-	 * LiteGraph's grid over the frontend's own background, every frame, which
-	 * is what turned a facility canvas black (`restoreOriginal` now undoes
-	 * exactly what the ON path did, and nothing else). But with that repaired
-	 * and the gate opened again, the background still did not come good on the
-	 * facility's ComfyUI — and a canvas thirty artists have to read is not the
-	 * place to keep testing a preference nobody asked for.
-	 *
-	 * ⚑⚑ SHUT MEANS THE PATCH IS NEVER INSTALLED — not a checkbox left off.
-	 * `drawBackCanvas` is never wrapped, `applyStyle` never runs, the section
-	 * is not drawn. So it is also the standing MEASUREMENT: a canvas that
-	 * still misbehaves is provably not ImissNuke.
-	 *
-	 * ⚑ TO OPEN IT (for us, per browser, no code edit and no rebuild):
-	 *     localStorage.setItem('imissnuke.bg', '1')   // then reload
-	 * or `window.__imissNukeAllowBg = true` before the tool loads. Everything
-	 * else in the tool — hotkeys, pipes, backdrops — is untouched by this.
-	 *
-	 * ⚑⚑ IF YOU ARE UPDATING ImissNuke: this block is not part of upstream.
-	 * Carry it across, or `check_nodekit.js` in Nuke2Comfy_ExportModule goes
-	 * red on the next bake and tells you so — that check exists exactly so
-	 * this cannot be forgotten quietly.
-	 * ===================================================================== */
-	const IMISSNUKE_BG_GATE = '2026-09-08';
-
-	function bgAllowed() {
-		try {
-			if (window.__imissNukeAllowBg === true) return true;
-			return window.localStorage.getItem('imissnuke.bg') === '1';
-		} catch (e) {
-			return false;                     // no storage, no exception: shut
 		}
 	}
 
@@ -873,166 +410,34 @@
 	window.NukeVueNodes = NukeVueNodes;
 
 	/* =====================================================================
-	 * PERFORMANCE — LAS COSITAS QUE CUESTAN FRAMES
+	 * PERFORMANCE — SQUARE CORNERS
 	 *
-	 * Jorge: "dentro del ImissNuke, ¿puedes ayudarme a hacer un switch para
-	 * que deshabilite los drop shadows y estas cositas? Al parecer en Linux
-	 * este tool no está funcionando."
+	 * Jorge pidió switches de rendimiento para la Linux (v17.6x). De los cuatro
+	 * se queda el que él usa: esquinas cuadradas (`LiteGraph.ROUND_RADIUS` a 0,
+	 * cuatro arcos menos por nodo en cada frame).
 	 *
-	 * ⚑⚑ CADA FILA ES UNA PROPIEDAD CON NOMBRE, Y SE PREGUNTA SI EXISTE.
-	 * Estos switches no dibujan nada: escriben banderas del renderer de
-	 * litegraph. Una bandera que este frontend no tiene es un switch que no
-	 * puede hacer nada — y un switch que no hace nada es exactamente el
-	 * síntoma que Jorge acaba de reportar del OTRO tool. Así que la sección
-	 * **no ofrece una fila cuyo destino no encontró**, y dice cuáles encontró.
-	 * Esa línea es la medición: si en la Linux del estudio salen todas y aun
-	 * así no cambia nada, el que las ignora es el renderer (Nodes 2.0 dibuja
-	 * los nodos por su cuenta) y no este switch.
-	 *
-	 * ⚑⚑ LO ORIGINAL SE GUARDA ANTES DE ESCRIBIR NADA, una sola vez. Apagar y
-	 * volver a prender tiene que devolver el valor con el que el frontend
-	 * nació, no un número que este archivo se inventó — es la misma regla que
-	 * `restoreOriginal` del fondo de canvas aprendió a la mala.
+	 * ⚑ LO ORIGINAL SE LEE UNA VEZ, antes de escribir nada: apagarlo devuelve
+	 * el radio con el que el frontend nació, no un número inventado aquí.
 	 * ===================================================================== */
 	class NukePerformance {
-		static canvas() {
+		static available() {
 			try {
-				return (typeof app !== 'undefined' && app.canvas) ? app.canvas : null;
-			} catch (e) { return null; }
-		}
-
-		static lg() {
-			try { return (typeof LiteGraph !== 'undefined') ? LiteGraph : null; }
-			catch (e) { return null; }
-		}
-
-		// ⚑ Una sola foto, y sólo cuando ya hay canvas: tomarla antes de que
-		// exista guardaría `undefined` como "lo original".
-		static snapshot() {
-			if (NukePerformance._orig) return NukePerformance._orig;
-			const c = NukePerformance.canvas();
-			const LG = NukePerformance.lg();
-			if (!c || !LG) return null;
-			NukePerformance._orig = {
-				render_shadows: c.render_shadows,
-				render_connections_border: c.render_connections_border,
-				render_info: c.render_info,
-				show_info: c.show_info,
-				ROUND_RADIUS: LG.ROUND_RADIUS,
-				DEFAULT_SHADOW_COLOR: LG.DEFAULT_SHADOW_COLOR
-			};
-			return NukePerformance._orig;
-		}
-
-		static get ROWS() {
-			return [
-				{
-					key: 'perfNoShadows',
-					id: 'in-sw-perf-shadows',
-					label: 'Disable node shadows',
-					tip: 'The drop shadow under every node. On a graph with two hundred nodes it is the cheapest frame you can buy back.',
-					has: () => {
-						const c = NukePerformance.canvas();
-						return !!c && ('render_shadows' in c);
-					},
-					names: ['canvas.render_shadows', 'LiteGraph.DEFAULT_SHADOW_COLOR'],
-					set: (off, o) => {
-						const c = NukePerformance.canvas(), LG = NukePerformance.lg();
-						if (c) c.render_shadows = off ? false : o.render_shadows;
-						// ⚑⚑ Y EL COLOR TAMBIÉN. Son dos mecanismos para una
-						// sola cosa visible, y este switch existe justamente
-						// porque en algún lado la bandera sola no alcanzó.
-						if (LG && ('DEFAULT_SHADOW_COLOR' in LG)) {
-							LG.DEFAULT_SHADOW_COLOR = off ? 'rgba(0,0,0,0)'
-								: o.DEFAULT_SHADOW_COLOR;
-						}
-					}
-				},
-				{
-					key: 'perfNoLinkBorders',
-					id: 'in-sw-perf-borders',
-					label: 'Disable connection borders',
-					tip: 'The dark outline litegraph draws around every wire — a second stroke per link, on top of the one you see.',
-					has: () => {
-						const c = NukePerformance.canvas();
-						return !!c && ('render_connections_border' in c);
-					},
-					names: ['canvas.render_connections_border'],
-					set: (off, o) => {
-						const c = NukePerformance.canvas();
-						if (c) c.render_connections_border = off ? false : o.render_connections_border;
-					}
-				},
-				{
-					key: 'perfSquareCorners',
-					id: 'in-sw-perf-corners',
-					label: 'Disable rounded corners',
-					tip: 'Square node corners. Rounded ones are an arc per corner, four per node, every frame.',
-					has: () => {
-						const LG = NukePerformance.lg();
-						return !!LG && typeof LG.ROUND_RADIUS === 'number';
-					},
-					names: ['LiteGraph.ROUND_RADIUS'],
-					set: (off, o) => {
-						const LG = NukePerformance.lg();
-						if (LG) LG.ROUND_RADIUS = off ? 0 : o.ROUND_RADIUS;
-					}
-				},
-				{
-					key: 'perfNoInfo',
-					id: 'in-sw-perf-info',
-					label: 'Hide the canvas info overlay',
-					tip: 'The little counter litegraph paints in the corner (nodes, links, fps). It is redrawn on every frame.',
-					/* ⚡ v18.51 — Y EN ESTE FRONTEND SE LLAMA `show_info`. Jorge vio la
-					   fila caer a "not on this frontend: canvas.render_info": el
-					   ComfyUI de hoy dibuja ese contador con `canvas.show_info` (lo
-					   escribe su ajuste Comfy.Graph.CanvasInfo) y ya no publica
-					   `render_info`. Se preguntan las DOS, y el switch escribe la que
-					   exista — la regla de la sección: una fila por propiedad que SÍ
-					   está. */
-					has: () => {
-						const c = NukePerformance.canvas();
-						return !!c && (('render_info' in c) || ('show_info' in c));
-					},
-					names: ['canvas.render_info', 'canvas.show_info'],
-					set: (off, o) => {
-						const c = NukePerformance.canvas();
-						if (!c) return;
-						if ('render_info' in c) c.render_info = off ? false : o.render_info;
-						if ('show_info' in c) c.show_info = off ? false : o.show_info;
-					}
-				}
-			];
-		}
-
-		/* Which rows this ComfyUI can actually act on. ⚑ Asked of the live
-		   canvas every time and never cached: `/object_info`'s lesson one repo
-		   over — the canvas lands after this file does. */
-		static found() {
-			const out = { have: [], missing: [] };
-			NukePerformance.ROWS.forEach(r => {
-				let ok = false;
-				try { ok = !!r.has(); } catch (e) { ok = false; }
-				(ok ? out.have : out.missing).push(r);
-			});
-			return out;
+				return typeof LiteGraph !== 'undefined' && typeof LiteGraph.ROUND_RADIUS === 'number';
+			} catch (e) { return false; }
 		}
 
 		static apply(cfg) {
-			const o = NukePerformance.snapshot();
-			if (!o) return false;
-			NukePerformance.ROWS.forEach(r => {
-				let ok = false;
-				try { ok = !!r.has(); } catch (e) { ok = false; }
-				if (!ok) return;
-				try { r.set(!!(cfg && cfg[r.key]), o); } catch (e) {}
-			});
-			const c = NukePerformance.canvas();
-			if (c) {
-				c.dirty_canvas = true;
-				c.dirty_bgcanvas = true;
-				if (c.setDirty) c.setDirty(true, true);
-			}
+			if (!NukePerformance.available()) return false;
+			if (NukePerformance._radius === undefined) NukePerformance._radius = LiteGraph.ROUND_RADIUS;
+			LiteGraph.ROUND_RADIUS = (cfg && cfg.perfSquareCorners) ? 0 : NukePerformance._radius;
+			try {
+				const c = (typeof app !== 'undefined') ? app.canvas : null;
+				if (c) {
+					c.dirty_canvas = true;
+					c.dirty_bgcanvas = true;
+					if (c.setDirty) c.setDirty(true, true);
+				}
+			} catch (e) {}
 			return true;
 		}
 	}
@@ -2020,7 +1425,6 @@
 		static init() {
 			if (ImissNukeManager._initialized) {
 				if (typeof app !== 'undefined' && app.canvas) {
-					ImissNukeManager.setupDblClickBlock(config.disableDblClick);
 					ImissNukeManager.syncComfyNavigationMode(config.lmbBoxSelect);
 					ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
 					// ⚑ Un segundo init() es la única oportunidad que tiene el enganche
@@ -2028,9 +1432,7 @@
 					// justo lo que pasa cargando desde custom_nodes. Poner un parche
 					// que ya está puesto no cuesta nada.
 					ImissNukeManager.setupAutoConnectOnAdd();
-					ImissNukeManager.setupModifierResize();
 					if (window.NukePipeRenderer) window.NukePipeRenderer.init(app.canvas);
-					NukeCanvasBackground.init(app.canvas);
 					NukeBackdropManager.init();
 					NukePerformance.apply(config);
 					// ⚑ mount, not just repaint. A second init() is what the panel
@@ -2051,16 +1453,15 @@
 				const vue = NukeVueNodes.isOn();
 				if (vue !== null) {
 					console.log('[ImissNuke] ' + NukeVueNodes.say()
-						+ (vue ? ' — Nodes 2.0 draws nodes as DOM elements, and it '
-							+ 'is what makes a Tab-created node unclickable. There '
-							+ 'is a switch for it in the ImissNuke panel.' : ''));
+						+ (vue ? ' — Nodes 2.0 draws nodes as DOM elements (the L '
+							+ 'layout needs a frontend whose node.pos setter reaches '
+							+ 'its layout store).' : ''));
 				}
 			} catch (e) {}
 
 			ImissNukeUI.init();
 			ImissNukeUI.updateTopBarState();
 			if (window.NukePipeRenderer) window.NukePipeRenderer.init(typeof app !== 'undefined' ? app.canvas : null);
-			NukeCanvasBackground.init(typeof app !== 'undefined' ? app.canvas : null);
 			NukeBackdropManager.init();
 			NukePerformance.apply(config);
 			ImissNukeManager.setupAutoConnectOnAdd();
@@ -2068,18 +1469,13 @@
 			ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
 			ImissNukeManager.setupGhostPlacementBypass();
 			ImissNukeManager.setupLimboSafetyListener();
-			// ⚑ ANTES que el zoom: los dos escuchan window en captura y el primero
-			// en registrarse es el primero en correr. El resize necesita poder
-			// detener el evento antes de que el zoom lo tome.
 			ImissNukeManager.setupPointerTracker();
-			ImissNukeManager.setupModifierResize();
 			ImissNukeManager.setupWacomAndMouseZoom();
 			ImissNukeManager.setupDropMenuBlock();
 			// ⚡ v17.94 — el bloqueo que SÍ alcanza al frontend nuevo. Necesita
 			// el `linkConnector` del canvas para llegar a su prototipo, así que
 			// también se reintenta en los dos timeouts de abajo: es idempotente.
 			ImissNukeManager.setupLinkReleaseBlock();
-			ImissNukeManager.setupDblClickBlock(config.disableDblClick);
 			ImissNukeManager.setupTabSearch(config.tabForSearch);
 			ImissNukeManager.patchSelectionOrderTracker();
 			ImissNukeManager.setupHotkeys();
@@ -2090,7 +1486,6 @@
 				ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
 				ImissNukeManager.setupAutoConnectOnAdd();
 				ImissNukeManager.setupLinkReleaseBlock();
-				if (typeof app !== 'undefined' && app.canvas) NukeCanvasBackground.applyStyle(app.canvas, config);
 				NukePerformance.apply(config);
 			}, 500);
 			setTimeout(() => {
@@ -2098,7 +1493,6 @@
 				ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
 				ImissNukeManager.setupAutoConnectOnAdd();
 				ImissNukeManager.setupLinkReleaseBlock();
-				if (typeof app !== 'undefined' && app.canvas) NukeCanvasBackground.applyStyle(app.canvas, config);
 				NukePerformance.apply(config);
 			}, 1500);
 		}
@@ -2445,204 +1839,6 @@
 				window.addEventListener('mouseup', onDirectUp, { capture: true });
 				window.__imissNukeDirectZoomListener = true;
 			}
-		}
-
-		/* ---- 2B. MODIFICADOR + MMB ARRASTRANDO = REDIMENSIONAR NODO ----
-		 *
-		 * Jorge: "¿hay manera de agregar alt (o windows key, un toggle pues) +
-		 * middle click (sin tocar la Wacom) para resize nodos? Quiero un toggle
-		 * para eso y prendido por default para mi ComfyUI de Windows y la Linux."
-		 *
-		 * ⚑⚑ VIVE EN `window` Y EN CAPTURA, NO EN EL PROTOTIPO. Es la lección
-		 * de v17.51, entera: litegraph amarra `processMouseDown.bind(this)` UNA
-		 * vez al construir el canvas, así que un parche al prototipo hecho
-		 * después — que es lo que pasa cuando el panel evalúa este archivo sobre
-		 * una página que lleva minutos abierta — es invisible para el mouse para
-		 * siempre. Ahí es donde el resize habría salido "sólo en Windows" igual
-		 * que el Tab, y por la misma razón. Aquí no puede: window en captura
-		 * corre antes que cualquier listener del canvas, lo hayan amarrado
-		 * cuando lo hayan amarrado.
-		 *
-		 * ⚑⚑ Y POR ESO EMPIEZA SOBRE UN NODO. Alt+MMB ya era el zoom clásico de
-		 * Nuke en este archivo (isZoomEvent), y dos gestos con el mismo atajo es
-		 * un gesto que no se puede predecir. La reja no es el modificador, es
-		 * DÓNDE cayó el press: sobre un nodo redimensiona, sobre lienzo vacío
-		 * hace zoom como siempre. Nada de lo que ya funcionaba cambia.
-		 *
-		 * ⚑ El modificador se elige porque no todos llegan al navegador: en
-		 * Linux el gestor de ventanas se queda con la combinación de mover y
-		 * redimensionar ventanas (Super en GNOME/KDE modernos, Alt en los
-		 * viejos) y la página nunca ve el evento. Si el default no responde, el
-		 * pulldown del panel es la salida y no hay que tocar código.
-		 */
-		static modifierHeld(e, key) {
-			if (!e) return false;
-			switch (key) {
-				case 'meta': return !!e.metaKey;
-				case 'ctrl': return !!e.ctrlKey;
-				case 'shift': return !!e.shiftKey;
-				case 'alt':
-				default: return !!e.altKey;
-			}
-		}
-
-		// ⚑ pointerToGraph y NO `graph_mouse`, por lo mismo que dice el comentario
-		// de NukeBackdropManager: graph_mouse guarda dónde estaba el cursor en el
-		// último MOVE, y un press no siempre viene después de uno.
-		static nodeUnderPointer(canvas, e) {
-			const graph = canvas && canvas.graph;
-			if (!graph) return null;
-			const p = NukeBackdropManager.pointerToGraph(canvas, e);
-			if (!p) return null;
-			try {
-				if (typeof graph.getNodeOnPos === 'function') {
-					const n = graph.getNodeOnPos(p[0], p[1], canvas.visible_nodes);
-					if (n) return n;
-				}
-			} catch (err) {}
-			const list = graph._nodes || [];
-			const th = (typeof LiteGraph !== 'undefined' && LiteGraph.NODE_TITLE_HEIGHT) || 30;
-			for (let i = list.length - 1; i >= 0; --i) {
-				const n = list[i];
-				if (!n || !n.pos || !n.size) continue;
-				if (p[0] >= n.pos[0] && p[0] <= n.pos[0] + n.size[0]
-					&& p[1] >= n.pos[1] - th && p[1] <= n.pos[1] + n.size[1]) return n;
-			}
-			return null;
-		}
-
-		// ⚑ El mínimo lo dice el NODO, no este archivo. computeSize() es lo que
-		// mide sus widgets; hacerlo más chico que eso es dibujar un nodo con los
-		// controles encimados, que es peor que no dejar encogerlo.
-		static minSizeOf(node) {
-			let mw = 90, mh = 40;
-			try {
-				if (typeof node.computeSize === 'function') {
-					const m = node.computeSize();
-					if (m && isFinite(m[0]) && isFinite(m[1])) { mw = m[0]; mh = m[1]; }
-				}
-			} catch (e) {}
-			return [mw, mh];
-		}
-
-		static setupModifierResize() {
-			if (ImissNukeManager._modResizeListener) return;
-			ImissNukeManager._modResizeListener = true;
-
-			const armed = () => {
-				const cfg = window.__imissNukeConfig || {};
-				return cfg.masterEnabled !== false && cfg.nukeModResize !== false;
-			};
-
-			const finish = () => {
-				const st = window.__nukeResizeState;
-				window.__nukeResizeState = null;
-				if (!st) return;
-				try {
-					// ⚑ change() y no sólo un repaint: un nodo de otro tamaño es un
-					// workflow distinto, y ComfyUI tiene que saber que hay cambios sin
-					// guardar igual que si lo hubieran movido.
-					if (st.moved && st.canvas.graph && st.canvas.graph.change) {
-						st.canvas.graph.change();
-					}
-					st.canvas.setDirty(true, true);
-				} catch (e) {}
-			};
-
-			const swallow = (e) => {
-				if (!e) return;
-				e.preventDefault();
-				e.stopPropagation();
-				if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-			};
-
-			const onDown = (e) => {
-				if (!e || e.button !== 1 || !armed()) return;
-				const cfg = window.__imissNukeConfig || {};
-				if (!ImissNukeManager.modifierHeld(e, cfg.nukeModResizeKey || 'alt')) return;
-
-				const canvas = (typeof app !== 'undefined' && app.canvas) ? app.canvas : null;
-				// ⚑ Sólo cuando el press cayó en el canvas del grafo. Lo que flote
-				// encima — un menú, un diálogo, un widget del DOM — es un click real
-				// en un elemento real y no es asunto nuestro.
-				if (!canvas || !canvas.canvas || e.target !== canvas.canvas) return;
-
-				const node = ImissNukeManager.nodeUnderPointer(canvas, e);
-				if (!node || !node.size) return;
-				if (node.flags && node.flags.collapsed) return;   // no hay qué estirar
-
-				window.__nukeResizeState = {
-					node, canvas,
-					scale: (canvas.ds && canvas.ds.scale) || 1,
-					startX: e.clientX, startY: e.clientY,
-					w0: node.size[0], h0: node.size[1],
-					min: ImissNukeManager.minSizeOf(node),
-					pointerId: (e.pointerId === undefined) ? 0 : e.pointerId,
-					moved: false
-				};
-
-				// ⚑ Y APAGA LOS OTROS DOS GESTOS EN EL MISMO PRESS. El zoom y el paneo
-				// se arman solos en el primer move con el botón de en medio abajo;
-				// dejarlos armados sería redimensionar y hacer zoom a la vez.
-				window.__nukeZoomState = null;
-				window.__nukePanState = null;
-				try {
-					canvas.dragging_canvas = false;
-					canvas.node_dragged = null;
-				} catch (err) {}
-				swallow(e);
-			};
-
-			const onMove = (e) => {
-				const st = window.__nukeResizeState;
-				if (!st) return;
-				// El botón de en medio se soltó en algún lado que no vimos.
-				if (e && e.buttons !== undefined && (e.buttons & 4) === 0) { finish(); return; }
-
-				const node = st.node;
-				const scale = (st.canvas.ds && st.canvas.ds.scale) || st.scale || 1;
-				const w = Math.max(st.min[0], st.w0 + (e.clientX - st.startX) / scale);
-				const h = Math.max(st.min[1], st.h0 + (e.clientY - st.startY) / scale);
-				st.moved = true;
-				try {
-					if (typeof node.setSize === 'function') {
-						node.setSize([w, h]);
-					} else {
-						node.size[0] = w;
-						node.size[1] = h;
-						if (typeof node.onResize === 'function') node.onResize(node.size);
-					}
-				} catch (err) {
-					try { node.size[0] = w; node.size[1] = h; } catch (e2) {}
-				}
-				try { st.canvas.setDirty(true, true); } catch (err) {}
-				swallow(e);
-			};
-
-			// ⚑ La soltada se traga también. litegraph nunca vio el press, así que
-			// entregarle la mitad de un gesto es como termina un resize paneando el
-			// lienzo — la misma regla que los botones del backdrop.
-			const onUp = (e) => {
-				if (!window.__nukeResizeState) return;
-				finish();
-				swallow(e);
-			};
-
-			// ⚑ mousedown/auxclick además de pointer*: el botón de en medio abre el
-			// autoscroll de Windows y el pegado del portapapeles primario de X11, y
-			// esos cuelgan del evento de mouse clásico, no del de pointer.
-			const onLegacyDown = (e) => { if (window.__nukeResizeState) swallow(e); };
-
-			window.addEventListener('pointerdown', onDown, { capture: true });
-			window.addEventListener('pointermove', onMove, { capture: true, passive: false });
-			window.addEventListener('mousemove', onMove, { capture: true, passive: false });
-			window.addEventListener('pointerup', onUp, { capture: true });
-			window.addEventListener('mouseup', onUp, { capture: true });
-			window.addEventListener('mousedown', onLegacyDown, { capture: true });
-			window.addEventListener('auxclick', onLegacyDown, { capture: true });
-			// Soltar el botón fuera de la ventana deja el gesto pegado si nadie mira.
-			window.addEventListener('blur', () => finish());
-			window.addEventListener('pointercancel', () => finish(), { capture: true });
 		}
 
 		// ---- 3A. LIMPIEZA TOTAL DE CABLES HUÉRFANOS (LIMBO WIRES) ----
@@ -3134,126 +2330,6 @@
 			return Math.min(open, Math.max(min, w + 24));
 		}
 
-		// ---- 4. BLOQUEO DE DOBLE CLIC EN CANVAS VACÍO ----
-		static setupDblClickBlock(enabled) {
-			if (LGraphCanvas.prototype.processMouseDblClick && !LGraphCanvas.prototype.processMouseDblClick.__imissNukeDblPatched) {
-				const origDblClick = LGraphCanvas.prototype.processMouseDblClick;
-				LGraphCanvas.prototype.processMouseDblClick = function (e) {
-					if (window.__imissNukeTabTriggered || window.__nukeTabTriggered || (e && (e.__imissNukeTabTriggered || e.__nukeTabTriggered))) {
-						return origDblClick.apply(this, arguments);
-					}
-					const cfg = window.__imissNukeConfig;
-					if (cfg && cfg.masterEnabled !== false && cfg.disableDblClick) {
-						const node = this.graph ? this.graph.getNodeOnPos(
-							this.graph_mouse[0], this.graph_mouse[1],
-							this.visible_nodes
-						) : null;
-						const group = this.graph ? (this.graph.getGroupOnPos ? this.graph.getGroupOnPos(
-							this.graph_mouse[0], this.graph_mouse[1]
-						) : null) : null;
-						if (!node && !group) return;
-					}
-					return origDblClick.apply(this, arguments);
-				};
-				LGraphCanvas.prototype.processMouseDblClick.__imissNukeDblPatched = true;
-			}
-
-			if (typeof app !== 'undefined' && app.canvas && app.canvas.canvas) {
-				const canvasEl = app.canvas.canvas;
-				if (ImissNukeManager._dblClickBlocker) {
-					canvasEl.removeEventListener('dblclick', ImissNukeManager._dblClickBlocker, true);
-					ImissNukeManager._dblClickBlocker = null;
-				}
-				if (enabled) {
-					ImissNukeManager._dblClickBlocker = (e) => {
-						if (window.__imissNukeTabTriggered || window.__nukeTabTriggered || (e && (e.__imissNukeTabTriggered || e.__nukeTabTriggered))) return;
-						const cfg = window.__imissNukeConfig;
-						if (cfg && cfg.masterEnabled !== false && cfg.disableDblClick) {
-							const c = (typeof app !== 'undefined' ? app.canvas : null);
-							const node = c?.graph?.getNodeOnPos ? c.graph.getNodeOnPos(
-								c.graph_mouse?.[0], c.graph_mouse?.[1], c.visible_nodes
-							) : null;
-							const group = c?.graph?.getGroupOnPos ? c.graph.getGroupOnPos(
-								c.graph_mouse?.[0], c.graph_mouse?.[1]
-							) : null;
-							if (!node && !group) {
-								e.stopPropagation();
-								e.preventDefault();
-							}
-						}
-					};
-					canvasEl.addEventListener('dblclick', ImissNukeManager._dblClickBlocker, true);
-				}
-			}
-
-			/* ⚡⚡ v17.99 — Y ÉSTE ES EL QUE DE VERDAD LO BLOQUEA. Jorge: "double
-			 * click search is off but is on in reality when I try to double
-			 * click — I want this to match the actual switch."
-			 *
-			 * ⚡⚡ TENÍA RAZÓN, Y LAS DOS MITADES DE ARRIBA SON LA PRUEBA: el
-			 * parche a `processMouseDblClick` y el que se traga el `dblclick`
-			 * del canvas son superficie de litegraph 1.x, y bajo Nodes 2.0 el
-			 * buscador NO sale por ahí. Medido en el frontend 1.52.7, en su
-			 * propio fuente:
-			 *
-			 *   LGraphCanvas.emitEvent({subType:'empty-double-click'})
-			 *     -> this.canvas.dispatchEvent(new CustomEvent('litegraph:canvas',
-			 *                                   {bubbles:true, detail}))
-			 *   NodeSearchBoxPopover.vue: useEventListener(document,
-			 *     'litegraph:canvas', e => ... showSearchBox(...))
-			 *
-			 * ⚡⚡ O SEA: SE DESPACHA EN EL CANVAS Y BURBUJEA HASTA `document`.
-			 * Por eso este oyente va en `document` y en fase de CAPTURA: la
-			 * captura baja de `document` al canvas, así que corre ANTES que el
-			 * de Vue pase lo que pase — que es la única forma de que
-			 * `stopImmediatePropagation` llegue a tiempo (en el propio blanco,
-			 * captura y burbuja corren en ORDEN DE REGISTRO, y el de Vue se
-			 * registró al arrancar la app, mucho antes que nosotros).
-			 *
-			 * ⚡⚡ Y EL DOBLE CLICK EN UN GRUPO SE BLOQUEA A MEDIAS, A
-			 * PROPÓSITO: el MISMO evento lo escucha `TitleEditor.vue` para
-			 * renombrar, y los dos se reparten el grupo por la altura de su
-			 * barra de título (`relativeY <= titleHeight` renombra, por debajo
-			 * abre el buscador). Tragarse el evento entero apagaría el rename,
-			 * que nadie pidió apagar.
-			 *
-			 * ⚡ `node-double-click` ni se toca: ése es el rename del nodo.
-			 */
-			if (ImissNukeManager._dblCanvasEvBlocker) {
-				document.removeEventListener('litegraph:canvas',
-					ImissNukeManager._dblCanvasEvBlocker, true);
-				ImissNukeManager._dblCanvasEvBlocker = null;
-			}
-			if (enabled) {
-				ImissNukeManager._dblCanvasEvBlocker = (e) => {
-					try {
-						if (window.__imissNukeTabTriggered || window.__nukeTabTriggered) return;
-						const cfg = window.__imissNukeConfig;
-						if (!cfg || cfg.masterEnabled === false || !cfg.disableDblClick) return;
-						const d = e && e.detail;
-						if (!d) return;
-						if (d.subType === 'empty-double-click') {
-							e.stopImmediatePropagation();
-							e.stopPropagation();
-							return;
-						}
-						if (d.subType !== 'group-double-click') return;
-						const g = d.group, oe = d.originalEvent;
-						if (!g || !oe) return;
-						const top = (g.pos && g.pos[1]) || 0;
-						const th = (g.titleHeight != null) ? g.titleHeight : 24;
-						// Debajo de la barra de título = buscador. Encima = rename.
-						if ((oe.canvasY - top) > th) {
-							e.stopImmediatePropagation();
-							e.stopPropagation();
-						}
-					} catch (err) {}
-				};
-				document.addEventListener('litegraph:canvas',
-					ImissNukeManager._dblCanvasEvBlocker, true);
-			}
-		}
-
 		// ---- 5. BUSCADOR MODERNO CON TECLA TAB (ABRIR / CERRAR) ----
 		static getOpenSearchBox() {
 			// 1. Check if an actual input is focused inside search/dialog
@@ -3508,7 +2584,7 @@
 				// switch es del Tab, así que vive en el Tab.
 				const chain = !cfg || cfg.tabAutoConnect !== false;
 				/* ⚑ v17.60 — y la de COLOCAR, que es otra cosa. Ver el bloque de
-				   `tabPlaceAtCursor` en DEFAULT_CONFIG. */
+				   `tabPlaceAtCursor` (FIXED: siempre ON). */
 				const place = !cfg || cfg.tabPlaceAtCursor !== false;
 
 				// Detect source node for Nuke-style auto-connect:
@@ -4702,7 +3778,7 @@
 		   que no hacer nada — es exactamente el estado confuso que él vio.
 
 		   ⚑ Las dos salidas REALES, dichas en el mismo aliento:
-		     · apagar Nodes 2.0 (este tool ya tiene el switch, `NukeVueNodes`), o
+		     · apagar Nodes 2.0 (en los Settings de ComfyUI), o
 		     · el arrange propio de ComfyUI, en la barrita de la selección — filas
 		       / columnas / rejilla con su slider de separación. No es la lógica
 		       de Nuke, pero es la que SÍ mueve nodos en 2.0. */
@@ -6852,32 +5928,98 @@
 	// (Nota: NukePipeRenderer se gestiona exclusivamente en ImissNuke_Lines.js)
 
 	// ---- PANEL DE CONFIGURACIÓN TOPBAR & TARJETA DE SHORTCUTS ----
+	/* =====================================================================
+	 * THE N AND ITS PANEL — HOMOLOGADOS CON EL HOTBOX (v2, 2026-11-08)
+	 *
+	 * Jorge: "nos quedó tan bonito el hotbox que quiero darle una chaineada…
+	 * homologar incluso el icono, la experiencia de los settings."
+	 *
+	 * El chip es el de la H: 32 px, radio 8, gris apagado; prendido, la marca
+	 * en color sobre un fondo oscuro teñido (la H es amarilla sobre ciruela, la
+	 * N es ámbar Nuke sobre café). La marca está hecha igual que la de la H —
+	 * las mismas barras y el mismo polvo de pixeles, en espejo — para que se
+	 * lean como hermanas en la barra. El panel es el de Hotbox Settings: grid
+	 * con ícono por fila, botones ● / ○, botones que ciclan con puntitos, y
+	 * Done abajo. Clic derecho en la N prende o apaga todo, como la H.
+	 * ===================================================================== */
+	const IN_LOGO = { bg: '#2a1d13', fg: '#F39C3D' };
+	const IN_MARK =
+		'<rect x="11.5" y="10.5" width="3" height="11" rx="1"/><rect x="17.5" y="10.5" width="3" height="11" rx="1"/>' +
+		'<polygon points="11.8,10.5 14.8,10.5 20.2,21.5 17.2,21.5"/>' +
+		'<rect x="21.7" y="3.9" width="4.8" height="3.2" rx="1.2"/><rect x="8.6" y="3.5" width="2.6" height="2.6" rx="0.8"/><rect x="16.9" y="7.1" width="1.4" height="1.4" rx="0.45"/>' +
+		'<rect x="8.6" y="9.2" width="1.2" height="1.2" rx="0.4"/><rect x="2.8" y="8.3" width="1.8" height="1.8" rx="0.55"/><rect x="27.6" y="10.5" width="1.6" height="1.6" rx="0.5"/>' +
+		'<rect x="24.1" y="15.8" width="1.6" height="1.6" rx="0.5"/><rect x="2" y="12.7" width="3.2" height="4.8" rx="1.2"/><rect x="4" y="19" width="2.8" height="2.8" rx="0.85"/>' +
+		'<rect x="2.2" y="22.8" width="1.6" height="1.6" rx="0.5"/><rect x="27.3" y="22.5" width="3" height="3" rx="0.9"/><rect x="20.1" y="23.9" width="1.4" height="1.4" rx="0.45"/>' +
+		'<rect x="12.45" y="25.1" width="4.5" height="3" rx="1.1"/><rect x="18.7" y="27.9" width="1.8" height="1.8" rx="0.55"/><rect x="8.1" y="24.1" width="1.2" height="1.2" rx="0.4"/>';
+
+	// The bare mark in currentColor (the top-bar button paints the chip around it)
+	function inMarkSVG(size) {
+		return `<svg viewBox="0 0 32 32" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${IN_MARK}</svg>`;
+	}
+
+	// The full chip, for the panel header
+	function inLogoChip(size) {
+		return `<svg viewBox="0 0 32 32" width="${size}" height="${size}" aria-hidden="true" style="display:block;flex:none">`
+			+ `<rect x="1" y="1" width="30" height="30" rx="6" fill="${IN_LOGO.bg}"/>`
+			+ `<g fill="${IN_LOGO.fg}" transform="translate(3.52 3.52) scale(0.78)">${IN_MARK}</g></svg>`;
+	}
+
+	// Stroke icons, same set and drawing as the Hotbox's
+	const IN_ICONS = {
+		power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+		keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+		pipes: '<circle cx="5" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 6h4l2 2v8l2 2h2"/>',
+		palette: '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.8 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1a1.6 1.6 0 0 1 1.6-1.7h2c3 0 5.6-2.5 5.6-5.6C22 6 17.5 2 12 2z"/>',
+		group: '<rect x="3" y="4" width="18" height="16" rx="2" stroke-dasharray="3 2.6"/><path d="M3 9h18"/>',
+		searchOff: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="7" y1="7" x2="15" y2="15"/>',
+		square: '<rect x="4" y="4" width="16" height="16"/><path d="M4 9V4h5"/>',
+		sync: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+		chevDown: '<path d="M6 9l6 6 6-6"/>',
+		chevRight: '<path d="M9 6l6 6-6 6"/>'
+	};
+
+	function inIco(name, size) {
+		const s = size || 15;
+		return `<svg class="in-ico" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IN_ICONS[name] || ''}</svg>`;
+	}
+
 	class ImissNukeUI {
+		static isOpen() {
+			const m = document.getElementById('imissnuke-modal');
+			return !!(m && m.classList.contains('open'));
+		}
+
+		static closeModal() {
+			const modal = document.getElementById('imissnuke-modal');
+			if (modal) modal.classList.remove('open');
+			const btn = document.getElementById('imissnuke-topbar-btn');
+			if (btn) btn.classList.remove('active', 'open');
+		}
+
 		static toggleModal() {
 			const modal = document.getElementById('imissnuke-modal');
 			const btn = document.getElementById('imissnuke-topbar-btn');
 			if (!modal) return;
 			if (modal.classList.contains('open')) {
-				modal.classList.remove('open');
-				if (btn) btn.classList.remove('open');
-			} else {
-				if (btn) {
-					btn.classList.add('open');
-					const rect = btn.getBoundingClientRect();
-					const modalWidth = 330;
-					let left = rect.left - 20;
-					if (left + modalWidth > window.innerWidth - 12) {
-						left = window.innerWidth - modalWidth - 12;
-					}
-					if (left < 10) left = 10;
-					modal.style.top = `${Math.round(rect.bottom + 6)}px`;
-					modal.style.left = `${Math.round(left)}px`;
-					modal.style.bottom = 'auto';
-					modal.style.right = 'auto';
-					modal.style.transformOrigin = 'top left';
-				}
-				modal.classList.add('open');
+				ImissNukeUI.closeModal();
+				return;
 			}
+			ImissNukeUI.render();
+			// Under the button, the way Hotbox Settings opens under the H
+			const mw = Math.min(440, window.innerWidth * 0.94);
+			let top = 46;
+			let left = Math.max(12, window.innerWidth - mw - 18);
+			if (btn && ImissNukeUI.isVisible(btn)) {
+				btn.classList.add('open');
+				const rect = btn.getBoundingClientRect();
+				top = Math.round(rect.bottom + 8);
+				left = Math.round(rect.left - 16);
+				if (left + mw > window.innerWidth - 12) left = window.innerWidth - mw - 12;
+				if (left < 10) left = 10;
+			}
+			modal.style.top = `${top}px`;
+			modal.style.left = `${Math.round(left)}px`;
+			modal.classList.add('open');
 		}
 
 		static updateTopBarState() {
@@ -6885,7 +6027,32 @@
 			if (!btn) return;
 			const isEnabled = (config.masterEnabled !== false);
 			btn.classList.toggle('tool-on', isEnabled);
-			btn.title = isEnabled ? 'ImissNuke (Enabled) - Settings' : 'ImissNuke (Disabled) - Settings';
+			btn.title = isEnabled
+				? 'ImissNuke (on) — click for settings, right-click to turn it off'
+				: 'ImissNuke (off) — click for settings, right-click to turn it on';
+		}
+
+		static setMaster(on) {
+			config.masterEnabled = !!on;
+			window.__imissNukeConfig = config;
+			saveConfig(config);
+			ImissNukeUI.updateTopBarState();
+			ImissNukeUI.refreshCanvas();
+			if (ImissNukeUI.isOpen()) ImissNukeUI.render();
+		}
+
+		static refreshCanvas() {
+			if (typeof app === 'undefined' || !app.canvas) return;
+			try {
+				app.canvas.dirty_bgcanvas = true;
+				app.canvas.dirty_canvas = true;
+				app.canvas.setDirty(true, true);
+				if (app.graph) {
+					if (app.graph.change) app.graph.change();
+					if (app.graph.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
+				}
+				if (app.canvas.draw) app.canvas.draw(true, true);
+			} catch (e) {}
 		}
 
 		static isVisible(el) {
@@ -6969,12 +6136,18 @@
 				btn.className = 'comfyui-button comfyui-menu-mobile-collapse imissnuke-topbar-btn';
 				btn.title = 'ImissNuke - Settings & Foundry Nuke Graph Workflow';
 				btn.setAttribute('aria-label', 'ImissNuke Settings');
-				btn.innerHTML = `<span class="imissnuke-n-icon">N</span>`;
 				btn.addEventListener('click', (e) => {
 					e.stopPropagation();
 					ImissNukeUI.toggleModal();
 				});
+				// Right-click turns the whole tool on or off, like the Hotbox's H
+				btn.addEventListener('contextmenu', (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					ImissNukeUI.setMaster(config.masterEnabled === false);
+				});
 			}
+			if (!btn.querySelector('svg')) btn.innerHTML = `<span class="imissnuke-n-icon">${inMarkSVG(24)}</span>`;
 			ImissNukeUI._topBtn = btn;
 			ImissNukeUI.updateTopBarState();
 
@@ -7064,961 +6237,206 @@
 			}
 		}
 
+		/* The whole panel is this table: one row per setting, each with its
+		   icon and the sentence that says what it does. A row that is not
+		   here is not a setting (see FIXED). */
+		static get ROWS() {
+			return [
+				{ key: 'masterEnabled', icon: 'power', label: 'ImissNuke', kind: 'master',
+					note: 'Nuke hotkeys, pipes and backdrops, all at once. Right-click the N in the top bar to flip it any time.' },
+				{ key: 'dKeyMode', icon: 'keyboard', label: 'D Key', kind: 'cycle',
+					opts: ['bypass', 'mute'], names: ['Bypass', 'Mute'],
+					note: 'What D does to the selected nodes: Bypass lets the image pass through them, Mute stops the branch there.' },
+				{ key: 'nukeLinesEnabled', icon: 'pipes', label: 'Nuke Pipes', kind: 'toggle',
+					note: 'Straight wires with 45° bends that route around nodes. Off: ComfyUI draws its own wires.' },
+				{ key: 'lineColorMode', icon: 'palette', label: 'Wire Color', kind: 'cycle', needs: 'nukeLinesEnabled',
+					opts: ['original', 'nukeDark'], names: ['Original Colors', 'Nuke Black'],
+					note: 'Each wire keeps the color of its type, or every wire goes black like in Nuke. Wires into the selection turn amber either way.' },
+				{ key: 'nukeGroupsEnabled', icon: 'group', label: 'Backdrops', kind: 'toggle',
+					note: 'Groups drawn as Nuke backdrops, with header buttons to run, bypass or mute what is inside. Off: ComfyUI draws its own groups.' },
+				{ key: 'blockOutputDropSearch', icon: 'searchOff', label: 'Output Drop', kind: 'toggle',
+					onText: 'Search Blocked', offText: 'Search Opens',
+					note: 'A wire pulled from an output and dropped on empty canvas: opens the node search and wires in the new node, or does nothing.' },
+				{ key: 'perfSquareCorners', icon: 'square', label: 'Square Corners', kind: 'toggle',
+					note: 'Nodes drawn with square corners: four fewer arcs per node on every frame. Helps on big graphs.' }
+			];
+		}
+
+		// The Nuke keys this tool adds, in the panel's fold
+		static get KEYS() {
+			return [
+				[['LMB'], 'Drag on empty canvas: box select'],
+				[['MMB', 'LMB'], 'Drag: smooth zoom (Wacom: pen tip + side button)'],
+				[['Tab'], 'Node search at the cursor'],
+				[['/'], 'Find a node by number or name'],
+				[['F'], 'Frame the selection, or the whole graph'],
+				[['L'], 'Lay out the selection'],
+				[['D'], 'Bypass / Mute the selection'],
+				[['Shift', '↑'], 'Select what feeds the selection (again: one more level)'],
+				[['Alt', 'H'], 'Hide inputs / Set & Get links'],
+				[['Ctrl', 'D'], 'Duplicate without links'],
+				[['Ctrl', 'E'], 'Clone with its input links'],
+				[['Shift', 'Q'], 'Connect the selection to the last selected node'],
+				[['Ctrl', 'Shift', 'C'], 'Color palette for nodes and groups'],
+				[['Ctrl', 'Shift', 'X'], 'Extract a node and bridge its wires (two nodes: swap them)'],
+				[['Ctrl', 'Shift', 'S'], 'Swap / replace a node'],
+				[['Ctrl', 'Shift', 'I'], 'Splice a node into a wire'],
+				[['Shift', 'Drop'], 'Splice the dragged node onto a wire'],
+				[['Ctrl', 'Shift', 'Drop'], 'Swap the dragged node with the one under it'],
+				[['Shift', 'R'], 'Queue the selected outputs']
+			];
+		}
+
+		static get CSS() {
+			return `
+.imissnuke-topbar-btn{display:inline-flex !important;align-items:center !important;justify-content:center !important;min-width:32px !important;height:32px !important;padding:0 4px !important;margin:0 3px !important;background:#2b2b34 !important;border:1px solid #3c3c46 !important;border-radius:8px !important;cursor:pointer !important;transition:background-color .15s ease,border-color .15s ease,color .15s ease !important;user-select:none !important;vertical-align:middle !important;box-sizing:border-box !important;box-shadow:none !important}
+.imissnuke-topbar-btn.in-grouped{margin:0 !important}
+.imissnuke-topbar-btn:hover{background:#383844 !important;border-color:#4c4c58 !important}
+.imissnuke-topbar-btn .imissnuke-n-icon{display:flex;align-items:center;justify-content:center;color:#71717a !important}
+.imissnuke-topbar-btn .imissnuke-n-icon svg{display:block;width:24px;height:24px}
+.imissnuke-topbar-btn:hover .imissnuke-n-icon{color:#e2e8f0 !important}
+.imissnuke-topbar-btn.tool-on{background:${IN_LOGO.bg} !important;border-color:#47301c !important}
+.imissnuke-topbar-btn.tool-on .imissnuke-n-icon{color:${IN_LOGO.fg} !important}
+.imissnuke-topbar-btn.tool-on:hover{background:#36261a !important;border-color:#6b4826 !important}
+.imissnuke-topbar-btn.open{box-shadow:0 0 0 2px rgba(243,156,61,.4) !important}
+#imissnuke-modal{position:fixed;top:46px;left:200px;z-index:2147483000;width:min(440px,94vw);max-height:calc(100vh - 60px);overflow-y:auto;background:var(--p-content-background,var(--comfy-menu-bg,#222222));border:1px solid #3c3c3c;border-radius:8px;padding:16px 18px;box-shadow:0 12px 36px rgba(0,0,0,.6);display:none;flex-direction:column;gap:12px;color:#e2e2e2;font:400 12.5px/1.4 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;box-sizing:border-box;text-align:left}
+#imissnuke-modal.open{display:flex}
+#imissnuke-modal *{box-sizing:border-box}
+#imissnuke-modal .in-t{font:600 14px/1.2 Inter,system-ui,sans-serif;color:#e2e2e2;display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid #333333}
+#imissnuke-modal .in-grid{display:grid;grid-template-columns:128px minmax(0,1fr);align-items:start;gap:12px}
+#imissnuke-modal .in-l{display:inline-flex;align-items:center;gap:8px;min-height:30px;white-space:nowrap;color:#9a9a9a;font-weight:500;font-size:12px}
+#imissnuke-modal .in-l .in-ico{color:#7aa7e0;flex:none}
+#imissnuke-modal .in-c{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+#imissnuke-modal .in-note{font-size:11px;line-height:1.4;color:#8a8a8a}
+#imissnuke-modal .in-b{display:inline-flex;align-items:center;gap:7px;margin:0;padding:6px 10px;border-radius:6px;border:1px solid #3c3c3c;background:#2a2a2a;color:#f0f0f0;font:500 12.5px/1.2 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s,color .12s}
+#imissnuke-modal .in-b:hover{background:#333333;border-color:#525252;color:#ffffff}
+#imissnuke-modal .in-b.on{background:#2d3542;border-color:#5c94f0;color:#ffffff}
+#imissnuke-modal .in-b.ghost{background:transparent;border-color:transparent;color:#a8a8a8}
+#imissnuke-modal .in-b.ghost:hover{background:#333333;color:#ffffff}
+#imissnuke-modal .in-cyc{gap:9px;min-width:168px;justify-content:space-between}
+#imissnuke-modal .in-cyc .in-ico,#imissnuke-modal .in-fold .in-ico{color:#8a8a8a}
+#imissnuke-modal .in-cyc-v{flex:1;text-align:left;font-weight:600}
+#imissnuke-modal .in-dots{display:inline-flex;gap:3px}
+#imissnuke-modal .in-dots i{width:5px;height:5px;border-radius:50%;background:#4a4a4a}
+#imissnuke-modal .in-dots i.on{background:#64a8f0}
+#imissnuke-modal .in-fold{min-width:168px;justify-content:space-between}
+#imissnuke-modal .in-off{opacity:.38;pointer-events:none;filter:grayscale(.6)}
+#imissnuke-modal .in-keys{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;width:100%;margin-top:2px;padding:9px 10px;background:rgba(0,0,0,.18);border:1px solid #303030;border-radius:6px}
+#imissnuke-modal .in-k{display:flex;align-items:center;gap:3px;color:#6e6e6e;font-size:10px;white-space:nowrap}
+#imissnuke-modal .in-k kbd{font:600 10.5px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e2e2e2;background:#2a2a2a;border:1px solid #3c3c3c;border-bottom-width:2px;border-radius:4px;padding:3px 5px}
+#imissnuke-modal .in-d{align-self:center;color:#b0b0b0;font-size:11.5px}
+#imissnuke-modal .in-foot{display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #333333}
+`;
+		}
+
+		static control(r) {
+			if (r.kind === 'cycle') {
+				const i = Math.max(0, r.opts.indexOf(config[r.key]));
+				return `<button type="button" class="in-b in-cyc" data-in-cycle="${r.key}" title="Click for the next option">`
+					+ `<span class="in-cyc-v">${r.names[i]}</span>`
+					+ `<span class="in-dots">${r.opts.map((o, j) => `<i${j === i ? ' class="on"' : ''}></i>`).join('')}</span>`
+					+ inIco('sync', 12) + '</button>';
+			}
+			const v = !!config[r.key];
+			const txt = r.kind === 'master'
+				? (v ? '● Enabled' : '○ Disabled')
+				: (v ? '● ' + (r.onText || 'On') : '○ ' + (r.offText || 'Off'));
+			return `<button type="button" class="in-b${v ? ' on' : ''}" data-in-toggle="${r.key}">${txt}</button>`;
+		}
+
+		static render() {
+			const modal = document.getElementById('imissnuke-modal');
+			if (!modal) return;
+			const on = config.masterEnabled !== false;
+			const keysOpen = !!ImissNukeUI._keysOpen;
+			const rows = ImissNukeUI.ROWS.map(r => {
+				const dim = (r.kind !== 'master' && !on) || (r.needs && !config[r.needs]);
+				const cls = dim ? ' in-off' : '';
+				return `<label class="in-l${cls}">${inIco(r.icon, 14)}<span>${r.label}</span></label>`
+					+ `<div class="in-c${cls}">${ImissNukeUI.control(r)}<div class="in-note">${r.note}</div></div>`;
+			}).join('');
+			const keys = ImissNukeUI.KEYS.map(([k, d]) =>
+				`<div class="in-k">${k.map(x => `<kbd>${x}</kbd>`).join('+')}</div><div class="in-d">${d}</div>`).join('');
+
+			modal.innerHTML =
+				`<div class="in-t">`
+					+ `<span style="display:inline-flex;align-items:center;gap:8px">${inLogoChip(20)}<span>ImissNuke Settings</span></span>`
+					+ `<button type="button" class="in-b ghost" data-in-close title="Close">✕</button>`
+				+ `</div>`
+				+ `<div class="in-grid">${rows}`
+					+ `<label class="in-l">${inIco('keyboard', 14)}<span>Shortcuts</span></label>`
+					+ `<div class="in-c">`
+						+ `<button type="button" class="in-b in-fold" data-in-keys>`
+							+ `<span>${ImissNukeUI.KEYS.length} Nuke keys</span>${inIco(keysOpen ? 'chevDown' : 'chevRight', 13)}</button>`
+						+ (keysOpen ? `<div class="in-keys">${keys}</div>` : '')
+					+ `</div>`
+				+ `</div>`
+				+ `<div class="in-foot">`
+					+ `<button type="button" class="in-b ghost" data-in-reset title="Put the settings above back the way ImissNuke ships">${inIco('sync', 12)}<span>Reset to Defaults</span></button>`
+					+ `<button type="button" class="in-b" data-in-close>Done</button>`
+				+ `</div>`;
+
+			modal.querySelectorAll('[data-in-close]').forEach(b => { b.onclick = ImissNukeUI.closeModal; });
+			modal.querySelectorAll('[data-in-toggle]').forEach(b => {
+				b.onclick = () => {
+					const k = b.getAttribute('data-in-toggle');
+					config[k] = !config[k];
+					ImissNukeUI.changed(k);
+				};
+			});
+			modal.querySelectorAll('[data-in-cycle]').forEach(b => {
+				b.onclick = () => {
+					const k = b.getAttribute('data-in-cycle');
+					const r = ImissNukeUI.ROWS.find(x => x.key === k);
+					config[k] = r.opts[(Math.max(0, r.opts.indexOf(config[k])) + 1) % r.opts.length];
+					ImissNukeUI.changed(k);
+				};
+			});
+			const kb = modal.querySelector('[data-in-keys]');
+			if (kb) kb.onclick = () => { ImissNukeUI._keysOpen = !ImissNukeUI._keysOpen; ImissNukeUI.render(); };
+			const rb = modal.querySelector('[data-in-reset]');
+			if (rb) {
+				rb.onclick = () => {
+					Object.assign(config, USER_DEFAULTS);
+					ImissNukeUI.changed('*');
+				};
+			}
+		}
+
+		static changed(key) {
+			window.__imissNukeConfig = config;
+			saveConfig(config);
+			ImissNukeUI.updateTopBarState();
+			if (key === 'perfSquareCorners' || key === '*') NukePerformance.apply(config);
+			ImissNukeUI.refreshCanvas();
+			ImissNukeUI.render();
+		}
+
 		static init() {
 			if (document.getElementById('imissnuke-ui-root')) return;
 
 			const root = document.createElement('div');
 			root.id = 'imissnuke-ui-root';
-			root.innerHTML = `
-				<style>
-					:root {
-						--imissnuke-scale: ${config.panelScale || 1.15};
-					}
-					.imissnuke-topbar-btn {
-						display: inline-flex !important;
-						align-items: center !important;
-						justify-content: center !important;
-						min-width: 32px !important;
-						height: 28px !important;
-						padding: 0 8px !important;
-						margin: 0 3px !important;
-						background: #2b2b34 !important;
-						border: 1px solid #3c3c46 !important;
-						border-radius: 6px !important;
-						cursor: pointer !important;
-						transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
-						user-select: none !important;
-						vertical-align: middle !important;
-						box-sizing: border-box !important;
-						box-shadow: none !important;
-					}
-					/* inside ComfyUI's own button pill it has to read as one of
-					   that pill's buttons, not as a button pushed up against it:
-					   the outer margin is what gives away a guest. */
-					.imissnuke-topbar-btn.in-grouped {
-						margin: 0 !important;
-					}
-					.imissnuke-topbar-btn:hover {
-						background: #383844 !important;
-						border-color: #4c4c58 !important;
-					}
-					.imissnuke-topbar-btn .imissnuke-n-icon {
-						display: flex;
-						align-items: center;
-						justify-content: center;
-						font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-						font-weight: 800 !important;
-						/* ⚑ a couple of pixels taller, and half a pixel down. The
-						   flex box centres the LINE, and a line carries descender
-						   room the N never uses, so a glyph centred by the box
-						   always sits a touch high next to its neighbours. */
-						font-size: 17.5px !important;
-						line-height: 1 !important;
-						transform: translateY(0.5px) scale(0.90, 1.22) !important;
-						transform-origin: center center !important;
-						color: #71717a !important;
-						text-shadow: none !important;
-					}
-					.imissnuke-topbar-btn:hover .imissnuke-n-icon {
-						color: #e2e8f0 !important;
-					}
-					/* When tool is ON: vibrant Foundry Nuke amber */
-					.imissnuke-topbar-btn.tool-on {
-						background: #e58c2c !important;
-						border-color: #d97706 !important;
-					}
-					.imissnuke-topbar-btn.tool-on .imissnuke-n-icon {
-						color: #ffffff !important;
-					}
-					.imissnuke-topbar-btn.tool-on:hover {
-						background: #f59e0b !important;
-						border-color: #e58c2c !important;
-					}
-					.imissnuke-topbar-btn.open {
-						box-shadow: 0 0 0 2px rgba(229, 140, 44, 0.45) !important;
-					}
-					#imissnuke-modal {
-						position: fixed;
-						top: 52px;
-						left: 200px;
-						z-index: 99999;
-						width: 335px;
-						max-height: calc((100vh - 80px) / var(--imissnuke-scale, 1.15));
-						overflow-y: auto;
-						background: #18191c;
-						border: 1px solid #34343a;
-						border-radius: 10px;
-						padding: 14px;
-						color: #e4e4e7;
-						font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-						box-shadow: 0 12px 38px rgba(0,0,0,0.8);
-						display: none;
-						flex-direction: column;
-						gap: 0;
-						transform: scale(var(--imissnuke-scale, 1.15));
-						transform-origin: top left;
-					}
-					#imissnuke-modal::-webkit-scrollbar { width: 5px; }
-					#imissnuke-modal::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
-					#imissnuke-modal.open { display: flex; }
-					.in-hdr {
-						display: flex; justify-content: space-between; align-items: center;
-						font-size: 13.5px; font-weight: 700; color: #ffffff;
-						padding-bottom: 10px; border-bottom: 1px solid #2d2d33;
-					}
-					.in-hdr-right { display: flex; align-items: center; gap: 6px; }
-					.in-scale-btns {
-						display: flex; align-items: center; background: #121214;
-						border: 1px solid #2b2b30; border-radius: 5px; padding: 2px;
-					}
-					.in-scale-btn {
-						background: transparent; border: none; color: #888;
-						padding: 2px 5px; font-size: 10px; font-weight: 600;
-						border-radius: 3px; cursor: pointer;
-					}
-					.in-scale-btn.active { background: #3b82f6; color: #fff; }
-					#imissnuke-close { cursor: pointer; color: #71717a; font-size: 16px; padding: 0 2px; }
-					#imissnuke-close:hover { color: #f43f5e; }
-					.in-sec {
-						display: flex; flex-direction: column; gap: 8px;
-						padding: 10px 0; border-bottom: 1px solid #25252a;
-					}
-					.in-sec:last-of-type { border-bottom: none; }
-					.in-lbl {
-						font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.8px;
-						color: #93c5fd; font-weight: 700;
-					}
-					.in-row {
-						display: flex; align-items: center; justify-content: space-between;
-						gap: 10px; min-height: 26px;
-						font-size: 12px; color: #d4d4d8; font-weight: 500;
-					}
-					/* the label never becomes a second line: the rows keep one
-					   rhythm, and an over-long one ellipsises instead */
-					.in-row > span:first-child {
-						min-width: 0; white-space: nowrap;
-						overflow: hidden; text-overflow: ellipsis;
-					}
-					.in-sw {
-						position: relative; width: 36px; height: 19px;
-						background: #2e2e34; border-radius: 10px;
-						cursor: pointer; transition: background 0.2s; flex-shrink: 0;
-						border: 1px solid #3f3f46;
-					}
-					.in-sw.on { background: #3b82f6; border-color: #60a5fa; }
-					.in-sw-dot {
-						position: absolute; top: 1.5px; left: 2px;
-						width: 14px; height: 14px; background: #888892;
-						border-radius: 50%; transition: all 0.2s;
-					}
-					.in-sw.on .in-sw-dot { transform: translateX(17px); background: #ffffff; }
-					/* One control column, one width: every group is 192px and every
-					   label stays on one line, so the rows line up on both edges
-					   instead of on the right only. 192 = the widest label
-					   ("Border (Outline)", 77px at 10px) plus padding, in two
-					   columns; the three-column groups fit inside it. Measured
-					   against the longest LABEL too ("Default Wire Color",
-					   112px): 112 + 10 gap + 176 = 298 in a 300px row. */
-					.in-btns {
-						display: grid; grid-template-columns: 1fr 1fr;
-						width: 176px !important; flex: 0 0 176px; box-sizing: border-box;
-						background: #121214; padding: 2px; border-radius: 6px; border: 1px solid #28282d;
-					}
-					.in-btn {
-						background: transparent; border: none; color: #a1a1aa;
-						padding: 4px 3px; font-size: 10px; border-radius: 4px; cursor: pointer; font-weight: 600;
-						white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-					}
-					.in-btn.active { background: #3b82f6; color: #fff; }
-					.in-hk-card {
-						background: #121214; border: 1px solid #28282e; border-radius: 8px;
-						padding: 10px 12px; margin-top: 4px;
-					}
-					.in-hk-list { display: flex; flex-direction: column; gap: 5.5px; margin-top: 6px; }
-					.in-hk-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
-					.in-keys { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-					.in-k {
-						background: #242428; border: 1px solid #3a3a42; border-bottom: 2px solid #4a4a52;
-						color: #e4e4e7; padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: 600;
-					}
-					.in-desc { color: #a1a1aa; font-size: 11px; text-align: right; }
-					.in-reset {
-						width: 100%; margin-top: 8px; padding: 7px; background: #222226;
-						border: 1px solid #34343a; color: #a1a1aa; border-radius: 6px;
-						font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
-					}
-					.in-reset:hover { background: #3b1820; color: #fda4af; border-color: #be123c; }
-					.in-slider-row {
-						display: flex; align-items: center; justify-content: space-between;
-						gap: 10px; min-height: 26px;
-						font-size: 12px; color: #d4d4d8; font-weight: 500;
-					}
-					/* same 192px column as the button groups, so a slider and a
-					   segmented control start at the same x */
-					.in-slider-container {
-						display: flex; align-items: center; gap: 8px;
-						width: 176px; flex: 0 0 176px; box-sizing: border-box;
-					}
-					.in-slider {
-						flex: 1; -webkit-appearance: none; height: 4px; border-radius: 2px;
-						background: #3f3f46; outline: none; cursor: pointer;
-					}
-					.in-slider::-webkit-slider-thumb {
-						-webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
-						background: #3b82f6; cursor: pointer; border: 2px solid #ffffff;
-					}
-					.in-slider-val {
-						font-family: monospace; font-size: 11px; color: #a1a1aa; min-width: 32px; text-align: right;
-					}
-				</style>
-
-				<div id="imissnuke-modal">
-					<div class="in-hdr">
-						<span style="display:flex;align-items:center;gap:6px;">
-							<span style="color:#ffffff;font-weight:900;">N</span> ImissNuke Settings
-						</span>
-						<div class="in-hdr-right">
-							<div class="in-scale-btns">
-								<button class="in-scale-btn ${config.panelScale === 1.0 ? 'active' : ''}" data-scale="1.0">100%</button>
-								<button class="in-scale-btn ${(!config.panelScale || config.panelScale === 1.15) ? 'active' : ''}" data-scale="1.15">120%</button>
-								<button class="in-scale-btn ${config.panelScale === 1.4 ? 'active' : ''}" data-scale="1.4">140%</button>
-							</div>
-							<span id="imissnuke-close">✕</span>
-						</div>
-					</div>
-
-					<!-- Master Power Switch (Enable / Disable All) -->
-					<div class="in-sec in-master-sec" style="background: #141418; margin: 4px 0 8px 0; padding: 10px 12px; border-radius: 8px; border: 1px solid #2e2e36;">
-						<div class="in-row" style="font-size: 12.5px; font-weight: 700; color: #ffffff;">
-							<span style="display:flex;align-items:center;gap:7px;">
-								<span id="in-master-icon" style="color: ${config.masterEnabled !== false ? '#e58c2c' : '#71717a'}; font-size: 14px;">⚡</span>
-								<span>Master Switch</span>
-							</span>
-							<div class="in-sw ${config.masterEnabled !== false ? 'on' : ''}" id="in-sw-master" title="Master toggle to enable or completely disable all ImissNuke features">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div id="in-master-sub" style="font-size: 10.5px; color: ${config.masterEnabled !== false ? '#9ca3af' : '#ef4444'}; margin-top: 3px; font-weight: 500;">
-							${config.masterEnabled !== false ? 'All Nuke pipes, hotkeys, and canvas features active' : 'Disabled — Native ComfyUI restored'}
-						</div>
-					</div>
-
-					<div id="imissnuke-sub-panel" style="${config.masterEnabled === false ? 'opacity: 0.35; pointer-events: none; filter: grayscale(0.6); transition: all 0.2s ease;' : 'transition: all 0.2s ease;'}">
-
-					<!-- Workflow & Controls -->
-					<div class="in-sec">
-						<div class="in-lbl">⚡ Workflow & Tablet</div>
-						<div class="in-row" title="Action for D key on selected nodes">
-							<span>D Key Action</span>
-							<div class="in-btns" style="width: 130px;">
-								<button class="in-btn ${config.dKeyMode === 'bypass' ? 'active' : ''}" data-dmode="bypass">Bypass</button>
-								<button class="in-btn ${config.dKeyMode === 'mute' ? 'active' : ''}" data-dmode="mute">Mute</button>
-							</div>
-						</div>
-						<div class="in-row" title="LMB drag on canvas makes box selection">
-							<span>LMB Drag = Select</span>
-							<div class="in-sw ${config.lmbBoxSelect ? 'on' : ''}" id="in-sw-lmb">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Middle click + Left click for smooth continuous zoom (or Wacom pen tip)">
-							<span>MMB + LMB Smooth Zoom</span>
-							<div class="in-sw ${config.nukeWacomZoom ? 'on' : ''}" id="in-sw-zoom">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Hold the modifier and drag with the middle mouse button over a node to resize it. No Wacom needed. On empty canvas the same combo still zooms. OFF by default: it locked up the canvas on the first try and is parked until that is understood.">
-							<span>Mod + MMB Drag = Resize Node <span style="opacity:.55;font-size:10px;">(parked)</span></span>
-							<div class="in-sw ${config.nukeModResize !== false ? 'on' : ''}" id="in-sw-modresize">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" id="in-modresize-key-row" title="Which modifier. A window manager can keep a combo for itself before the page ever sees it — on Linux that is usually Super/Win — so if one does nothing, pick another.">
-							<span style="padding-left:12px;opacity:.8;">↳ Modifier key</span>
-							<div class="in-btns" style="width: 190px;">
-								<button class="in-btn ${(config.nukeModResizeKey || 'alt') === 'alt' ? 'active' : ''}" data-modresizekey="alt">Alt</button>
-								<button class="in-btn ${config.nukeModResizeKey === 'meta' ? 'active' : ''}" data-modresizekey="meta">Win</button>
-								<button class="in-btn ${config.nukeModResizeKey === 'ctrl' ? 'active' : ''}" data-modresizekey="ctrl">Ctrl</button>
-								<button class="in-btn ${config.nukeModResizeKey === 'shift' ? 'active' : ''}" data-modresizekey="shift">Shift</button>
-							</div>
-						</div>
-						<div class="in-row" title="Shift + Up arrow adds the nodes that FEED whatever you have selected — one hop per press, so pressing it again climbs another level up the tree. Up here means upstream in the flow, the way it does in Nuke, not whatever happens to sit higher on the canvas.
-
-It does not take the key: with nothing selected, or nothing wired into it, the arrow passes straight through.">
-							<span>Shift + ↑ = Select Upstream</span>
-							<div class="in-sw ${config.nukeSelectUpstream !== false ? 'on' : ''}" id="in-sw-upnodes">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="The Tab key opens the node search at the cursor. Just the hotkey — what happens to the node afterwards is the switch below.">
-							<span>Tab = Node Search</span>
-							<div class="in-sw ${config.tabForSearch ? 'on' : ''}" id="in-sw-tab">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" id="in-tab-place-row" title="After Tab creates a node, move it to where you pressed Tab. ComfyUI's own search drops it in the middle of the view — this is what puts it back under your cursor. ON everywhere.">
-							<span style="padding-left:12px;opacity:.8;">↳ Place new node at cursor</span>
-							<div class="in-sw ${config.tabPlaceAtCursor !== false ? 'on' : ''}" id="in-sw-tab-place">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" id="in-tab-chain-row" title="After Tab creates a node, chain it to the node that was selected, the way Foundry Nuke does.${IS_LINUX ? ' Ships OFF on Linux — that half has never been measured there. The hotkey and the placement above stay on. Turn this on to test it; remembered per machine.' : ''}">
-							<span style="padding-left:12px;opacity:.8;">↳ Auto-connect to selected node${IS_LINUX ? ' <span style="opacity:.6;font-size:10px;">(off on Linux)</span>' : ''}</span>
-							<div class="in-sw ${config.tabAutoConnect !== false ? 'on' : ''}" id="in-sw-tab-chain">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						${(function () {
-							/* ⚑⚑ SÓLO SI ESTE FRONTEND LO TIENE. Regla de ⚡ Performance,
-							   sin cambiarle una coma: una fila cuyo destino no existe no
-							   se ofrece, y la sección dice qué encontró. Aquí el destino
-							   es un ajuste de ComfyUI que ha cambiado de nombre entre
-							   versiones — `NukeVueNodes.id()` lo BUSCA, primero por sus
-							   deletreos conocidos y luego por forma, y si nada contesta
-							   un booleano esta fila no existe. */
-							const vueOn = NukeVueNodes.isOn();
-							if (vueOn === null) return '';
-							return `
-						<div class="in-row" id="in-vuenodes-row" title="ComfyUI's own setting (${NukeVueNodes.id()}), offered here because it is the one that decides whether Tab works.
-
-Nodes 2.0 draws every node as a Vue DOM element instead of painting it on the canvas. When ComfyUI opens its node search without the event that triggered it, the new node is born at a NaN position — and under this renderer the thing you click is the DOM element, so nothing this panel writes to node.pos can put it back. Switching this OFF is what Jorge measured as the fix.
-
-Changing it here changes ComfyUI's setting. Reload the page for it to take hold.">
-							<span>ComfyUI Nodes 2.0 <span style="opacity:.55;font-size:10px;">(Vue nodes — off = Tab works)</span></span>
-							<div class="in-sw ${vueOn ? 'on' : ''}" id="in-sw-vuenodes">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>`;
-						}())}
-						<div class="in-row" title="Block the node search when you double-click empty canvas (or the body of a group).
-
-v17.99: measured on frontend 1.52.7 — under Nodes 2.0 that search is opened from a 'litegraph:canvas' event, so this switch now blocks THAT, not only the old litegraph path. Double-clicking a group's TITLE still renames it.">
-							<span>Block Double-Click Search</span>
-							<div class="in-sw ${config.disableDblClick ? 'on' : ''}" id="in-sw-dbl">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Block the node search (and the context menu) when you UNPLUG a wire and drop it on empty canvas. The wire still disconnects — only the popup is skipped.
-
-v17.94: this hooks LinkConnector.dropOnNothing, which is the method the modern frontend really goes through. Dragging from an EMPTY slot still opens the search.">
-							<span>Block Search on Unplug</span>
-							<div class="in-sw ${config.blockInputDisconnectSearch !== false ? 'on' : ''}" id="in-sw-block-input-drop">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Block search popup when dropping an output wire into empty canvas (when OFF, drops open modern search & auto-connects)">
-							<span>Block Output Drop Search</span>
-							<div class="in-sw ${config.blockOutputDropSearch ? 'on' : ''}" id="in-sw-block-output-drop">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Block the node search (and the context menu) when you drag a wire off a slot that ALREADY has one and drop it on empty canvas. Dragging from an EMPTY slot still opens the search — that is how you add a node.
-
-v17.94: measured on frontend 1.52.7, THIS is the switch for “I pulled a wire off something connected and the search jumped at me”.">
-							<span>Block Search on Connected Slot</span>
-							<div class="in-sw ${config.searchOnlyEmptyOutput !== false ? 'on' : ''}" id="in-sw-empty-output-search">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Connect multiple compatible slots on Shift+Q">
-							<span>Multi Auto-Connect</span>
-							<div class="in-sw ${config.multiAutoConnect ? 'on' : ''}" id="in-sw-multiac">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Place newly created nodes immediately adjacent without ghost/click confirmation (Foundry Nuke behavior)">
-							<span>Instant Node Placement</span>
-							<div class="in-sw ${config.nukeInstantPlacement !== false ? 'on' : ''}" id="in-sw-instant-place">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-					</div>
-
-					<!-- Nuke Pipes & Arrows -->
-					<div class="in-sec">
-						<div class="in-lbl">📐 Nuke Pipes & Arrows</div>
-						<div class="in-row" title="Enable Foundry Nuke style pipes">
-							<span>Nuke Lines</span>
-							<div class="in-sw ${config.nukeLinesEnabled ? 'on' : ''}" id="in-sw-lines">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Show or hide flow direction arrows on wires">
-							<span>Show Arrows</span>
-							<div class="in-sw ${config.nukeArrowsEnabled ? 'on' : ''}" id="in-sw-arrows">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Deform and bend wires around nodes">
-							<span>Avoid Nodes</span>
-							<div class="in-sw ${config.avoidNodes !== false ? 'on' : ''}" id="in-sw-avoid">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Only highlight incoming (upstream) wires feeding into selected nodes like Foundry Nuke">
-							<span>Highlight Upstream Only</span>
-							<div class="in-sw ${config.highlightUpstreamOnly !== false ? 'on' : ''}" id="in-sw-upstream">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Wire color when unselected">
-							<span>Default Wire Color</span>
-							<div class="in-btns" style="width: 170px; grid-template-columns: 1fr 1fr;">
-								<button class="in-btn ${(!config.lineColorMode || config.lineColorMode === 'nukeDark') ? 'active' : ''}" data-linecolormode="nukeDark">Nuke Black</button>
-								<button class="in-btn ${config.lineColorMode === 'original' ? 'active' : ''}" data-linecolormode="original">Original Colors</button>
-							</div>
-						</div>
-						<div class="in-row" title="Wire color when connected node is selected">
-							<span>When Selected</span>
-							<div class="in-btns" style="width: 160px; grid-template-columns: 1fr 1fr;">
-								<button class="in-btn ${(!config.selectionColorMode || config.selectionColorMode === 'amber') ? 'active' : ''}" data-selcolormode="amber">Nuke Amber</button>
-								<button class="in-btn ${config.selectionColorMode === 'white' ? 'active' : ''}" data-selcolormode="white">White</button>
-							</div>
-						</div>
-						<div class="in-row" title="Pipe line thickness">
-							<span>Pipe Thickness</span>
-							<div class="in-btns" style="width: 170px; grid-template-columns: repeat(3, 1fr);">
-								<button class="in-btn ${(config.pipeWidth === 1.5) ? 'active' : ''}" data-pipewidth="1.5">Thin</button>
-								<button class="in-btn ${(!config.pipeWidth || config.pipeWidth === 2.5) ? 'active' : ''}" data-pipewidth="2.5">Medium</button>
-								<button class="in-btn ${(config.pipeWidth === 4.0) ? 'active' : ''}" data-pipewidth="4.0">Thick</button>
-							</div>
-						</div>
-						<div class="in-row" title="Arrow shape">
-							<span>Arrow Style</span>
-							<div class="in-btns" style="width: 140px; grid-template-columns: 1fr 1fr;">
-								<button class="in-btn ${(!config.arrowStyle || config.arrowStyle === 'triangle') ? 'active' : ''}" data-arrowstyle="triangle">Triangle</button>
-								<button class="in-btn ${config.arrowStyle === 'chevron' ? 'active' : ''}" data-arrowstyle="chevron">Chevron</button>
-							</div>
-						</div>
-						<div class="in-row" title="Arrow size in pixels">
-							<span>Arrow Size</span>
-							<div class="in-btns" style="width: 140px; grid-template-columns: repeat(3, 1fr);">
-								<button class="in-btn ${config.arrowSize === 9 ? 'active' : ''}" data-arrowsize="9">9px</button>
-								<button class="in-btn ${(!config.arrowSize || config.arrowSize === 12) ? 'active' : ''}" data-arrowsize="12">12px</button>
-								<button class="in-btn ${config.arrowSize === 16 ? 'active' : ''}" data-arrowsize="16">16px</button>
-							</div>
-						</div>
-					</div>
-
-					<!-- Nuke Canvas Background — behind IMISSNUKE_BG_GATE, which is
-					     SHUT for this studio. Hidden and not deleted: with the
-					     gate open it is the same section it always was, so
-					     there is one implementation and not a second one kept
-					     in a drawer. Shut, none of it is installed, and
-					     controls for a patch that is not there would be
-					     lying. -->
-					<div class="in-sec" style="${bgAllowed() ? '' : 'display:none;'}">
-						<div class="in-lbl">🎨 Nuke Canvas Background${bgAllowed() ? ' <span style="color:#f59e0b;font-weight:700;">· dev</span>' : ''}</div>
-						<div class="in-row" title="Override canvas background with Foundry Nuke gray or faint dots">
-							<span>Enable Nuke Background</span>
-							<div class="in-sw ${config.nukeBgEnabled ? 'on' : ''}" id="in-sw-nukebg">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" title="Choose flat solid gray or faint dotted grid">
-							<span>Background Style</span>
-							<div class="in-btns" style="width: 170px; grid-template-columns: 1fr 1fr;">
-								<button class="in-btn ${(config.nukeBgStyle === 'flat' || !config.nukeBgStyle) ? 'active' : ''}" data-nukebgstyle="flat">Flat Gray</button>
-								<button class="in-btn ${config.nukeBgStyle === 'dots' ? 'active' : ''}" data-nukebgstyle="dots">Dotted Grid</button>
-							</div>
-						</div>
-						<div class="in-slider-row" id="in-bg-gray-row">
-							<span title="Adjust canvas gray tone from dark to light gray">Gray Tone</span>
-							<div class="in-slider-container">
-								<input type="range" class="in-slider" id="in-slider-gray-level" min="12" max="85" step="1" value="${config.nukeBgGrayLevel || 38}">
-								<span class="in-slider-val" id="in-val-gray-level">${config.nukeBgGrayLevel || 38}%</span>
-							</div>
-						</div>
-						<div class="in-slider-row" id="in-bg-dot-row" style="display: ${config.nukeBgStyle === 'dots' ? 'flex' : 'none'};">
-							<span title="Dot intensity / opacity">Dot Intensity</span>
-							<div class="in-slider-container">
-								<input type="range" class="in-slider" id="in-slider-dot-opacity" min="0.05" max="0.50" step="0.01" value="${config.nukeBgDotOpacity || 0.22}">
-								<span class="in-slider-val" id="in-val-dot-opacity">${Math.round((config.nukeBgDotOpacity || 0.22) * 100)}%</span>
-							</div>
-						</div>
-					</div>
-
-					<!-- Nuke Backdrops (Groups) -->
-					<div class="in-sec">
-						<div class="in-lbl">📦 Nuke Backdrops (Groups)</div>
-						<div class="in-row" title="Off: groups are drawn by ComfyUI exactly as it does without this extension">
-							<span>Nuke Backdrops</span>
-							<div class="in-sw ${config.nukeGroupsEnabled !== false ? 'on' : ''}" id="in-sw-groups">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>
-						<div class="in-row" id="in-group-style-row" title="Default backdrop rendering style for groups">
-							<span>Default Style</span>
-							<div class="in-btns" style="width: 170px; grid-template-columns: 1fr 1fr;">
-								<button class="in-btn ${(config.defaultBackdropStyle === 'normal' || !config.defaultBackdropStyle) ? 'active' : ''}" data-groupstyle="normal">Fill (Normal)</button>
-								<button class="in-btn ${config.defaultBackdropStyle === 'border' ? 'active' : ''}" data-groupstyle="border">Border (Outline)</button>
-							</div>
-						</div>
-						<div class="in-row" id="in-group-size-row" title="Default title font size for groups/backdrops">
-							<span>Title Font Size</span>
-							<div class="in-btns" style="width: 170px; grid-template-columns: repeat(3, 1fr);">
-								<button class="in-btn ${(config.defaultBackdropFontSize === 18) ? 'active' : ''}" data-groupfontsize="18">18px (S)</button>
-								<button class="in-btn ${(!config.defaultBackdropFontSize || config.defaultBackdropFontSize === 24 || config.defaultBackdropFontSize === 28) ? 'active' : ''}" data-groupfontsize="28">28px (M)</button>
-								<button class="in-btn ${(config.defaultBackdropFontSize === 42) ? 'active' : ''}" data-groupfontsize="42">42px (L)</button>
-							</div>
-						</div>
-					</div>
-
-					<!-- Performance -->
-					<div class="in-sec">
-						<div class="in-lbl">⚡ Performance</div>
-						${(function () {
-							const f = NukePerformance.found();
-							const rows = f.have.map(r => `
-						<div class="in-row" title="${r.tip}">
-							<span>${r.label}</span>
-							<div class="in-sw ${config[r.key] ? 'on' : ''}" id="${r.id}">
-								<div class="in-sw-dot"></div>
-							</div>
-						</div>`).join('');
-							/* ⚑⚑ LA LÍNEA ES LA MEDICIÓN, no decoración. Cada
-							   switch de aquí escribe UNA propiedad con nombre;
-							   si este frontend no la tiene, la fila no se
-							   ofrece y esta línea dice cuál faltó. Y si salen
-							   las cuatro y aun así no cambia nada, el que las
-							   ignora es el renderer — que es exactamente lo que
-							   no se podía saber del otro tool. */
-							const miss = f.missing.length
-								? ` · <span style="color:#f59e0b;">not on this frontend: ${f.missing.map(r => r.names[0]).join(', ')}</span>`
-								: '';
-							/* ⚑⚑ v17.64 — Y EL NÚMERO DEL RUTEO DE LOS CABLES, que es
-							   donde de verdad se iba el tiempo. Jorge: "luego se
-							   vuelve lento todo." Era `ensureMapLinks`
-							   recalculando cada 30 ms hubiera cambiado algo o no.
-							   Esta línea es la que convierte "está lento" en una
-							   cifra: cuántas veces recalculó, cuánto tardó cada
-							   una, y de qué tamaño es el grafo. Un caché del que
-							   nadie mira la tasa de acierto es una creencia. */
-							let pipe = '';
-							try {
-								const R = window.NukePipeRenderer;
-								const s = R && R.stats;
-								if (s && (s.calcs || s.hits)) {
-									const secs = Math.max(1, (Date.now() - s.since) / 1000);
-									const per = s.calcs ? (s.ms / s.calcs) : 0;
-									pipe = `
-						<div style="opacity:.55;font-size:11px;padding:4px 2px 0;line-height:1.45;">
-							Pipe routing: <b>${s.calcs}</b> recomputes in ${secs.toFixed(0)}s
-							(${(s.calcs / secs).toFixed(1)}/s, ${per.toFixed(1)}ms each)
-							over ${s.nodes} nodes / ${s.links} links — ${s.hits} cache hits.
-							It recomputes when a node moves, arrives or resizes, and not on a clock.
-							${s.calcs / secs > 12 ? '<span style="color:#f59e0b;">That rate means something is moving constantly — a node being dragged, or an extension writing positions every frame.</span>' : ''}
-						</div>`;
-								}
-							} catch (e) {}
-							return rows + `
-						<div style="opacity:.55;font-size:11px;padding:4px 2px 0;line-height:1.45;">
-							These write litegraph’s own render flags (${f.have.map(r => r.names[0]).join(', ') || '—'})${miss}.
-							If a switch is here and pressing it changes nothing, the renderer is ignoring the flag — not this switch.
-						</div>` + pipe;
-						}())}
-					</div>
-
-					<!-- Shortcuts Reference Card -->
-					<div class="in-sec in-hk-card">
-						<div class="in-lbl" style="color:#60a5fa;display:flex;align-items:center;gap:6px;">
-							<span>⌨</span> NUKE SHORTCUTS GUIDE
-						</div>
-						<div class="in-hk-list">
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">LMB</kbd></div><div class="in-desc">Box Select Nodes</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">MMB</kbd>+<kbd class="in-k">LMB</kbd></div><div class="in-desc">Smooth Continuous Zoom</div></div>
-							${config.nukeModResize === false ? '' : `<div class="in-hk-row"><div class="in-keys"><kbd class="in-k" id="in-hk-modresize">${MOD_LABELS[config.nukeModResizeKey || 'alt'] || 'Alt'}</kbd>+<kbd class="in-k">MMB</kbd></div><div class="in-desc">Drag on a Node to Resize it</div></div>`}
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Tab</kbd></div><div class="in-desc">Node Search at Cursor</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">/</kbd></div><div class="in-desc">Find Node by Number or Name</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">F</kbd></div><div class="in-desc">Focus / Frame Selection</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">D</kbd></div><div class="in-desc">Bypass / Mute Node</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Alt</kbd>+<kbd class="in-k">H</kbd></div><div class="in-desc">Hide Inputs / Virtual Links</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">D</kbd></div><div class="in-desc">Duplicate without Links</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">E</kbd></div><div class="in-desc">Clone with Input Links</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Shift</kbd>+<kbd class="in-k">Q</kbd></div><div class="in-desc">Auto-Connect to Target</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">Shift</kbd>+<kbd class="in-k">C</kbd></div><div class="in-desc">Color Palette</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">Shift</kbd>+<kbd class="in-k">X</kbd></div><div class="in-desc">Extract Node & Bridge</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">Shift</kbd>+<kbd class="in-k">S</kbd></div><div class="in-desc">Swap / Replace Node</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">Shift</kbd>+<kbd class="in-k">I</kbd></div><div class="in-desc">Splice Node into Wire</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Shift</kbd>+<kbd class="in-k">Drop</kbd></div><div class="in-desc">Splice Node on Drop</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Ctrl</kbd>+<kbd class="in-k">Shift</kbd>+<kbd class="in-k">Drop</kbd></div><div class="in-desc">Swap Node on Drop</div></div>
-							<div class="in-hk-row"><div class="in-keys"><kbd class="in-k">Shift</kbd>+<kbd class="in-k">R</kbd></div><div class="in-desc">Queue Selected Outputs</div></div>
-						</div>
-					</div>
-					</div><!-- /#imissnuke-sub-panel -->
-
-					<button class="in-reset" id="imissnuke-reset">Reset to Defaults</button>
-				</div>
-			`;
-
+			root.innerHTML = `<style>${ImissNukeUI.CSS}</style>`
+				+ `<div id="imissnuke-modal" role="dialog" aria-label="ImissNuke Settings"></div>`;
 			document.body.appendChild(root);
 
 			ImissNukeUI.setupTopBarMounting();
+			ImissNukeUI.render();
 
-			const modal = document.getElementById('imissnuke-modal');
-			const closeBtn = document.getElementById('imissnuke-close');
-
-			closeBtn.addEventListener('click', () => {
-				modal.classList.remove('open');
-				const btn = document.getElementById('imissnuke-topbar-btn');
-				if (btn) btn.classList.remove('active', 'open');
-			});
-
+			// A click anywhere else closes it; so does Esc
 			document.addEventListener('pointerdown', (e) => {
+				if (!ImissNukeUI.isOpen()) return;
 				const m = document.getElementById('imissnuke-modal');
 				const b = document.getElementById('imissnuke-topbar-btn');
-				if (!m || !m.classList.contains('open')) return;
-				if (m.contains(e.target) || (b && b.contains(e.target))) return;
-				m.classList.remove('open');
-				if (b) b.classList.remove('active', 'open');
+				if ((m && m.contains(e.target)) || (b && b.contains(e.target))) return;
+				ImissNukeUI.closeModal();
 			});
-
-			const refreshCanvas = () => {
-				if (typeof app !== 'undefined' && app.canvas) {
-					NukeCanvasBackground.applyStyle(app.canvas, config);
-					app.canvas.dirty_bgcanvas = true;
-					app.canvas.dirty_canvas = true;
-					app.canvas.setDirty(true, true);
-					if (app.graph) {
-						if (app.graph.change) app.graph.change();
-						if (app.graph.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
-					}
-					if (app.canvas.draw) app.canvas.draw(true, true);
-				}
-			};
-
-			modal.querySelectorAll('.in-scale-btn').forEach(btn => {
-				btn.addEventListener('click', () => {
-					modal.querySelectorAll('.in-scale-btn').forEach(b => b.classList.remove('active'));
-					btn.classList.add('active');
-					config.panelScale = parseFloat(btn.dataset.scale);
-					window.__imissNukeConfig = config;
-					document.documentElement.style.setProperty('--imissnuke-scale', config.panelScale);
-					saveConfig(config);
-				});
-			});
-
-			modal.querySelectorAll('[data-dmode]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const mode = btn.getAttribute('data-dmode');
-					config.dKeyMode = mode;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-dmode]').forEach(b => b.classList.toggle('active', b.getAttribute('data-dmode') === mode));
-					saveConfig(config);
-				});
-			});
-
-			// Background Style (flat vs dots)
-			modal.querySelectorAll('[data-nukebgstyle]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const st = btn.getAttribute('data-nukebgstyle');
-					config.nukeBgStyle = st;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-nukebgstyle]').forEach(b => b.classList.toggle('active', b.getAttribute('data-nukebgstyle') === st));
-					const dotRow = document.getElementById('in-bg-dot-row');
-					if (dotRow) dotRow.style.display = (st === 'dots') ? 'flex' : 'none';
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Gray Darkness slider
-			const graySlider = document.getElementById('in-slider-gray-level');
-			const grayVal = document.getElementById('in-val-gray-level');
-			if (graySlider) {
-				graySlider.addEventListener('input', (e) => {
-					const val = parseInt(e.target.value, 10);
-					config.nukeBgGrayLevel = val;
-					window.__imissNukeConfig = config;
-					if (grayVal) grayVal.textContent = `${val}%`;
-					saveConfig(config);
-					refreshCanvas();
-				});
-			}
-
-			// Dot Intensity slider
-			const dotSlider = document.getElementById('in-slider-dot-opacity');
-			const dotVal = document.getElementById('in-val-dot-opacity');
-			if (dotSlider) {
-				dotSlider.addEventListener('input', (e) => {
-					const val = parseFloat(e.target.value);
-					config.nukeBgDotOpacity = val;
-					window.__imissNukeConfig = config;
-					if (dotVal) dotVal.textContent = `${Math.round(val * 100)}%`;
-					saveConfig(config);
-					refreshCanvas();
-				});
-			}
-
-			// Line Color Mode (Unselected: nukeDark vs original)
-			modal.querySelectorAll('[data-linecolormode]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const mode = btn.getAttribute('data-linecolormode');
-					config.lineColorMode = mode;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-linecolormode]').forEach(b => b.classList.toggle('active', b.getAttribute('data-linecolormode') === mode));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Selection Color Mode (Selected: amber vs white)
-			modal.querySelectorAll('[data-selcolormode]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const mode = btn.getAttribute('data-selcolormode');
-					config.selectionColorMode = mode;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-selcolormode]').forEach(b => b.classList.toggle('active', b.getAttribute('data-selcolormode') === mode));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Pipe Thickness (Thin 1.5, Medium 2.5, Thick 4.0)
-			modal.querySelectorAll('[data-pipewidth]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const w = parseFloat(btn.getAttribute('data-pipewidth'));
-					config.pipeWidth = w;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-pipewidth]').forEach(b => b.classList.toggle('active', parseFloat(b.getAttribute('data-pipewidth')) === w));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Arrow Style
-			modal.querySelectorAll('[data-arrowstyle]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const st = btn.getAttribute('data-arrowstyle');
-					config.arrowStyle = st;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-arrowstyle]').forEach(b => b.classList.toggle('active', b.getAttribute('data-arrowstyle') === st));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Arrow Size
-			modal.querySelectorAll('[data-arrowsize]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const sz = parseInt(btn.getAttribute('data-arrowsize'), 10);
-					config.arrowSize = sz;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-arrowsize]').forEach(b => b.classList.toggle('active', parseInt(b.getAttribute('data-arrowsize'), 10) === sz));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			const bindToggle = (id, key, onToggle) => {
-				const el = document.getElementById(id);
-				if (!el) return;
-				el.addEventListener('click', () => {
-					config[key] = !config[key];
-					window.__imissNukeConfig = config;
-					el.classList.toggle('on', config[key]);
-					saveConfig(config);
-					if (onToggle) onToggle(config[key]);
-					refreshCanvas();
-				});
-			};
-
-			const swMaster = document.getElementById('in-sw-master');
-			if (swMaster) {
-				swMaster.addEventListener('click', () => {
-					config.masterEnabled = (config.masterEnabled === false) ? true : false;
-					window.__imissNukeConfig = config;
-					swMaster.classList.toggle('on', config.masterEnabled);
-					saveConfig(config);
-
-					const icon = document.getElementById('in-master-icon');
-					const sub = document.getElementById('in-master-sub');
-					const subPanel = document.getElementById('imissnuke-sub-panel');
-
-					if (icon) icon.style.color = config.masterEnabled ? '#e58c2c' : '#71717a';
-					if (sub) {
-						sub.textContent = config.masterEnabled ? 'All Nuke pipes, hotkeys, and canvas features active' : 'Disabled — Native ComfyUI restored';
-						sub.style.color = config.masterEnabled ? '#9ca3af' : '#ef4444';
-					}
-					if (subPanel) {
-						if (config.masterEnabled) {
-							subPanel.style.opacity = '1';
-							subPanel.style.pointerEvents = 'auto';
-							subPanel.style.filter = 'none';
-						} else {
-							subPanel.style.opacity = '0.35';
-							subPanel.style.pointerEvents = 'none';
-							subPanel.style.filter = 'grayscale(0.6)';
-						}
-					}
-
-					ImissNukeUI.updateTopBarState();
-					refreshCanvas();
-				});
-			}
-
-			bindToggle('in-sw-lmb', 'lmbBoxSelect', (v) => ImissNukeManager.syncComfyNavigationMode(v));
-			bindToggle('in-sw-zoom', 'nukeWacomZoom');
-			bindToggle('in-sw-upnodes', 'nukeSelectUpstream');
-			// ⚑ La fila de abajo se atenúa con el hotkey apagado: sin Tab no hay
-			// nada que colocar ni encadenar, pero el switch sigue diciendo en qué
-			// quedó — un control que se esfuma es una función que la gente cree
-			// que rompió.
-			const dimTabChainRow = () => {
-				const on = config.tabForSearch !== false;
-				['#in-tab-place-row', '#in-tab-chain-row'].forEach((sel) => {
-					const row = modal.querySelector(sel);
-					if (!row) return;
-					row.style.opacity = on ? '' : '0.35';
-					row.style.pointerEvents = on ? '' : 'none';
-				});
-			};
-			bindToggle('in-sw-tab', 'tabForSearch', (v) => {
-				ImissNukeManager.setupTabSearch(v);
-				dimTabChainRow();
-			});
-			dimTabChainRow();
-			// ⚑ Sin callback a propósito: el manejador de Tab lee `tabAutoConnect`
-			// en cada press, así que no hay nada que re-instalar.
-			bindToggle('in-sw-tab-place', 'tabPlaceAtCursor');
-			bindToggle('in-sw-tab-chain', 'tabAutoConnect');
-
-			/* ⚑⚑ ESTE NO ES UN AJUSTE NUESTRO, así que NO pasa por `bindToggle`:
-			   no vive en nuestro config, no se guarda en nuestro localStorage y
-			   no tiene un default que podamos prometer. Se escribe en ComfyUI y
-			   **se lee de vuelta**; si la lectura no coincide, el switch se
-			   queda como estaba y lo dice, en vez de pintarse prendido sobre un
-			   ajuste que nunca cambió. */
-			(function () {
-				const el = document.getElementById('in-sw-vuenodes');
-				if (!el) return;
-				el.addEventListener('click', () => {
-					const now = NukeVueNodes.isOn();
-					if (now === null) return;
-					const ok = NukeVueNodes.set(!now);
-					const back = NukeVueNodes.isOn();
-					el.classList.toggle('on', back === true);
-					const sub = document.getElementById('in-master-sub');
-					if (sub) {
-						sub.textContent = ok
-							? ('ComfyUI Nodes 2.0 is now ' + (back ? 'ON' : 'OFF')
-								+ ' — reload the page for it to take hold')
-							: ('ComfyUI refused that write — ' + NukeVueNodes.say());
-						sub.style.color = ok ? '#9ca3af' : '#ef4444';
-					}
-					console.log('[ImissNuke] ' + NukeVueNodes.say()
-						+ (ok ? ' — reload the page for it to take hold'
-							: ' — THE WRITE DID NOT TAKE'));
-				});
-			})();
-
-			// Mod + MMB resize. La fila del modificador se atenúa con el switch
-			// apagado en vez de desaparecer — misma regla que las dos filas de los
-			// backdrops: un control que se esfuma es una función que la gente cree
-			// que rompió.
-			const dimResizeKeyRow = () => {
-				const row = modal.querySelector('#in-modresize-key-row');
-				if (!row) return;
-				const on = config.nukeModResize !== false;
-				row.style.opacity = on ? '' : '0.35';
-				row.style.pointerEvents = on ? '' : 'none';
-			};
-			bindToggle('in-sw-modresize', 'nukeModResize', () => dimResizeKeyRow());
-			dimResizeKeyRow();
-			modal.querySelectorAll('[data-modresizekey]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const k = btn.getAttribute('data-modresizekey');
-					config.nukeModResizeKey = k;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-modresizekey]').forEach(b =>
-						b.classList.toggle('active', b.getAttribute('data-modresizekey') === k));
-					// La guía de atajos muestra la tecla elegida, así que se repinta a
-					// mano: nada la vuelve a dibujar sola.
-					const kbd = modal.querySelector('#in-hk-modresize');
-					if (kbd) kbd.textContent = MOD_LABELS[k] || 'Alt';
-					saveConfig(config);
-				});
-			});
-			bindToggle('in-sw-dbl', 'disableDblClick', (v) => ImissNukeManager.setupDblClickBlock(v));
-			bindToggle('in-sw-block-input-drop', 'blockInputDisconnectSearch');
-			bindToggle('in-sw-block-output-drop', 'blockOutputDropSearch');
-			bindToggle('in-sw-empty-output-search', 'searchOnlyEmptyOutput');
-			bindToggle('in-sw-multiac', 'multiAutoConnect');
-			bindToggle('in-sw-instant-place', 'nukeInstantPlacement', (v) => ImissNukeManager.syncInstantPlacement(v));
-			bindToggle('in-sw-lines', 'nukeLinesEnabled', () => refreshCanvas());
-			bindToggle('in-sw-arrows', 'nukeArrowsEnabled', () => refreshCanvas());
-			bindToggle('in-sw-avoid', 'avoidNodes', () => refreshCanvas());
-			bindToggle('in-sw-upstream', 'highlightUpstreamOnly', () => refreshCanvas());
-			bindToggle('in-sw-nukebg', 'nukeBgEnabled', (v) => {
-				if (typeof app !== 'undefined' && app.canvas) {
-					NukeCanvasBackground.applyStyle(app.canvas, config);
-					app.canvas.dirty_bgcanvas = true;
-					app.canvas.dirty_canvas = true;
-					app.canvas.setDirty(true, true);
-					if (app.canvas.draw) app.canvas.draw(true, true);
-				}
-				refreshCanvas();
-			});
-
-			// Nuke Backdrops on/off. The two rows under it are dimmed rather
-			// than hidden: a control that vanishes is a feature people think
-			// they broke.
-			bindToggle('in-sw-groups', 'nukeGroupsEnabled', () => {
-				const on = config.nukeGroupsEnabled !== false;
-				['in-group-style-row', 'in-group-size-row'].forEach(id => {
-					const el = modal.querySelector('#' + id);
-					if (el) {
-						el.style.opacity = on ? '' : '0.35';
-						el.style.pointerEvents = on ? '' : 'none';
-					}
-				});
-				refreshCanvas();
-			});
-			(function () {
-				const on = config.nukeGroupsEnabled !== false;
-				['in-group-style-row', 'in-group-size-row'].forEach(id => {
-					const el = modal.querySelector('#' + id);
-					if (el && !on) { el.style.opacity = '0.35'; el.style.pointerEvents = 'none'; }
-				});
-			}());
-
-			// Group/Backdrop Default Style (normal vs border)
-			modal.querySelectorAll('[data-groupstyle]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const st = btn.getAttribute('data-groupstyle');
-					config.defaultBackdropStyle = st;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-groupstyle]').forEach(b => b.classList.toggle('active', b.getAttribute('data-groupstyle') === st));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Group/Backdrop Default Font Size (18, 28, 42)
-			modal.querySelectorAll('[data-groupfontsize]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const sz = parseInt(btn.getAttribute('data-groupfontsize'), 10);
-					config.defaultBackdropFontSize = sz;
-					window.__imissNukeConfig = config;
-					modal.querySelectorAll('[data-groupfontsize]').forEach(b => b.classList.toggle('active', parseInt(b.getAttribute('data-groupfontsize'), 10) === sz));
-					saveConfig(config);
-					refreshCanvas();
-				});
-			});
-
-			// Performance — one binding per row that was actually drawn, from
-			// the same table that drew it. A second list of ids here is a
-			// second place for a row to be forgotten.
-			NukePerformance.ROWS.forEach(r => {
-				bindToggle(r.id, r.key, () => { NukePerformance.apply(config); });
-			});
-
-			document.getElementById('imissnuke-reset').addEventListener('click', () => {
-				Object.assign(config, DEFAULT_CONFIG);
-				window.__imissNukeConfig = config;
-				saveConfig(config);
-				location.reload();
-			});
+			document.addEventListener('keydown', (e) => {
+				if (e.key !== 'Escape' || !ImissNukeUI.isOpen()) return;
+				e.stopPropagation();
+				ImissNukeUI.closeModal();
+			}, true);
 		}
 	}
 
@@ -8031,7 +6449,6 @@ v17.94: measured on frontend 1.52.7, THIS is the switch for “I pulled a wire o
 		setup() {
 			ImissNukeManager.init();
 			if (typeof app !== 'undefined' && app.canvas) {
-				ImissNukeManager.setupDblClickBlock(config.disableDblClick);
 				ImissNukeManager.syncComfyNavigationMode(config.lmbBoxSelect);
 			}
 		}
