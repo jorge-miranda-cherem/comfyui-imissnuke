@@ -55,6 +55,13 @@ Hover any row in the panel for a one-line tip.
 `ComfyUI/user/default/imissnuke/presets.json`, and the **Saved In** row shows the full path.
 **Download a Copy** and **Load from File** take them to another computer or a teammate.
 
+**One ComfyUI for many people.** A page that carries ImissNuke can keep the file for each person
+instead, the way it keeps the Hotbox's: set `window.__imissNukeFiles = { folder(), read(name), write(name, obj) }`
+before ImissNuke loads. `folder()` answers `{ folder, ready, why }`, `read('presets.json')` gives the
+saved object (or `null` when there is none yet) and `write('presets.json', obj)` saves it. Until
+`ready`, the presets stay in the browser and are written when the folder can be reached; call
+`window.__imissNukePresets.filesChanged()` when that changes.
+
 ## More
 
 [MIT License](LICENSE) · Nuke is a trademark of The Foundry Visionmongers Ltd. ImissNuke is not affiliated with Foundry.

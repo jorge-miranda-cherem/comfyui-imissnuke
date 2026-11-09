@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-imissnuke"
 description = "Nuke-style node graph for ComfyUI: Nuke hotkeys (Tab, F, D, Shift+Q, Ctrl+Shift+X…), straight Nuke pipes, groups as backdrops, remappable keys and presets. No Python nodes, zero dependencies."
-version = "2.2.0"
+version = "2.3.0"
 license = { file = "LICENSE" }
 dependencies = []
 

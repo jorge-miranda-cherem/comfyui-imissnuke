@@ -6263,11 +6263,27 @@
 	 *   el botón que cicla pasa al siguiente preset y lo aplica
 	 *   Download a Copy   baja la lista (un respaldo, o para pasarla)
 	 *   Load from File…   sus presets se suman a los tuyos; nada se pisa
+	 *
+	 * ⚑ v2.3 — LA CARPETA DE CADA QUIEN, COMO EL HOTBOX (Jorge: "que tenga lo
+	 * del usuario igual que hotbox"). Un ComfyUI de estudio es uno para ~30
+	 * artistas con UN usuario: /userdata es `user/default/imissnuke`, el mismo
+	 * archivo para todos. Una página que trae ImissNuke ahí (el Scene Manager,
+	 * por el Nuke de cada artista) guarda el archivo ella misma:
+	 * window.__imissNukeFiles = { folder(), read(name), write(name, obj) },
+	 * puesto antes de que ImissNuke cargue — la misma puerta que
+	 * window.__hotboxFiles. Entonces el archivo es ~/comfyui/imissnuke/
+	 * presets.json de quien corre ese Nuke y la carpeta compartida no se toca.
+	 * Mientras la carpeta no se alcanza, los presets se quedan en este
+	 * navegador y se escriben al volver. Sin esa página, /userdata como antes.
 	 * ===================================================================== */
 	const PRESET_LS = 'imissnuke_presets_v1';
 	const PRESET_FILE = 'imissnuke/presets.json';
-	const IN_PRESETS = { list: [], active: '', userDir: '' };
+	const PRESET_NAME = 'presets.json';   // its name in the folder a page keeps
+	const IN_PRESETS = { list: [], active: '', userDir: '', host: null, hostDir: '', hostWait: '', pending: false };
 	window.__imissNukePresets = IN_PRESETS;   // para la consola, como __imissNukeConfig
+	// the page that keeps the file says its folder can be reached now, or no
+	// longer (the Scene Manager, when a Nuke comes or goes) — __hotbox.filesChanged
+	IN_PRESETS.filesChanged = () => inPresetsLoad();
 
 	function inApiObj() {
 		return (typeof app !== 'undefined' && app && app.api)
@@ -6294,8 +6310,52 @@
 	}
 
 	function inPresetsDir() {
+		if (IN_PRESETS.host) return IN_PRESETS.hostDir || '~/comfyui/imissnuke';
 		const a = inApiObj();
 		return inPathJoin(IN_PRESETS.userDir || 'ComfyUI/user', (a && a.user) || 'default', 'imissnuke');
+	}
+
+	function inPresetsRedraw() {
+		if (ImissNukeUI.isOpen() && typeof ImissNukeUI._naming !== 'string') ImissNukeUI.render();
+	}
+
+	/* Where the page that keeps the file says it is, and whether it can be
+	   reached now (`ready`) or why not (`why`: "Waiting for Nuke") */
+	function inPresetsHostInfo() {
+		const h = IN_PRESETS.host = window.__imissNukeFiles;
+		IN_PRESETS.hostWait = IN_PRESETS.hostWait || 'Looking for your folder';
+		return Promise.resolve().then(() => h.folder())
+			.catch(err => ({ why: String((err && err.message) || err) }))
+			.then(j => {
+				j = j || {};
+				IN_PRESETS.hostDir = String(j.folder || IN_PRESETS.hostDir || '');
+				IN_PRESETS.hostWait = j.ready ? '' : String(j.why || 'Waiting for your folder');
+				inPresetsRedraw();
+			});
+	}
+
+	/* The file, once the folder can be reached. Changed while it could not:
+	   this browser has the newest list. Not there yet: what this browser had
+	   starts it. */
+	function inPresetsHostLoad() {
+		if (IN_PRESETS.hostWait) return;
+		if (IN_PRESETS.pending) {
+			IN_PRESETS.pending = false;
+			return inPresetsSave();
+		}
+		return Promise.resolve().then(() => IN_PRESETS.host.read(PRESET_NAME))
+			.then(d => {
+				if (d && inPresetsAdopt(d)) {
+					try { localStorage.setItem(PRESET_LS, JSON.stringify(inPresetsPayload())); } catch (e) {}
+					inPresetsRedraw();
+				} else if (!d && IN_PRESETS.list.length) {
+					return inPresetsSave();
+				}
+			})
+			.catch(() => {
+				ImissNukeUI._msg = { text: 'Could not read the presets file · kept in this browser', cls: 'err', at: 'presets' };
+				inPresetsRedraw();
+			});
 	}
 
 	function inPresetsPath() {
@@ -6303,6 +6363,7 @@
 	}
 
 	function inPresetsWhere() {
+		if (window.__imissNukeFiles) return Promise.resolve();   // inPresetsLoad asks the page
 		const a = inApiObj();
 		let p;
 		try { p = inFetch('/system_stats'); } catch (e) { return Promise.resolve(); }
@@ -6378,6 +6439,7 @@
 
 	function inPresetsLoad() {
 		try { inPresetsAdopt(JSON.parse(localStorage.getItem(PRESET_LS) || 'null')); } catch (e) {}
+		if (window.__imissNukeFiles) return inPresetsHostInfo().then(inPresetsHostLoad);
 		let p;
 		try { p = inFetch('/userdata/' + encodeURIComponent(PRESET_FILE), { cache: 'no-store' }); } catch (e) { return Promise.resolve(); }
 		return Promise.resolve(p)
@@ -6393,6 +6455,16 @@
 	function inPresetsSave() {
 		const body = inPresetsPayload();
 		try { localStorage.setItem(PRESET_LS, JSON.stringify(body)); } catch (e) {}
+		if (IN_PRESETS.host) {
+			// the folder cannot be reached yet: written when it can
+			if (IN_PRESETS.hostWait) { IN_PRESETS.pending = true; return Promise.resolve(); }
+			return Promise.resolve().then(() => IN_PRESETS.host.write(PRESET_NAME, body))
+				.catch(() => {
+					IN_PRESETS.pending = true;
+					ImissNukeUI._msg = { text: 'Could not write the presets file · kept in this browser', cls: 'err', at: 'presets' };
+					inPresetsRedraw();
+				});
+		}
 		let p;
 		try {
 			p = inFetch('/userdata/' + encodeURIComponent(PRESET_FILE) + '?overwrite=true', {
@@ -6955,7 +7027,9 @@
 					+ `<div class="in-c">${ImissNukeUI.presetsHTML()}${msgAt('presets')}</div>`
 					+ `<label class="in-l">${inIco('folder', 14)}<span>Saved In</span></label>`
 					+ `<div class="in-c">`
-						+ `<div class="in-path" data-in-tip="Your presets are written to this file, so they follow you to any browser on this ComfyUI">${inEsc(inPresetsPath())}</div>`
+						+ `<div class="in-path" data-in-tip="${IN_PRESETS.host ? 'Your presets are written to this file in your own home folder, so they are yours on any browser' : 'Your presets are written to this file, so they follow you to any browser on this ComfyUI'}">${inEsc(inPresetsPath())}</div>`
+						// the folder cannot be reached yet (no Nuke): said in grey, not an error
+						+ (IN_PRESETS.host && IN_PRESETS.hostWait ? `<div class="in-st">${inEsc(IN_PRESETS.hostWait)} · kept in this browser</div>` : '')
 						+ `<div class="in-btns">`
 							+ `<button type="button" class="in-b" data-in-copy="file" data-in-tip="Copy the full path of the file">${inIco('copy', 13)}<span>Copy Path</span></button>`
 							+ `<button type="button" class="in-b" data-in-copy="dir" data-in-tip="Copy the path of the folder">${inIco('copy', 13)}<span>Copy Folder Path</span></button>`
