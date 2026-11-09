@@ -81,6 +81,10 @@
 	 * tabla REDEFAULTED con sus 8 epochs. Todo está en el commit "Baseline" del
 	 * repo de ImissNuke.
 	 *
+	 * ⚑ v2.2 (2026-11-09): se fue Square Corners (`LiteGraph.ROUND_RADIUS` a
+	 * 0) con la clase que lo aplicaba. Jorge: "nunca lo uso". Un valor
+	 * guardado de antes se ignora: loadConfig sólo lee USER_DEFAULTS.
+	 *
 	 * ⚑ LA ÚNICA DIFERENCIA DE SISTEMA QUE QUEDA: el auto-connect del Tab
 	 * (encadenar el nodo nuevo al seleccionado) sale OFF en Linux y ON en
 	 * Windows. Se partió en v17.57 para aislar "el nodo nace en otro lado"; las
@@ -96,8 +100,7 @@
 		nukeLinesEnabled: true,
 		lineColorMode: 'original',     // 'original' (slot type colors) | 'nukeDark'
 		nukeGroupsEnabled: false,      // false = ComfyUI draws its own groups, untouched
-		blockOutputDropSearch: false,  // true = an output wire dropped on empty canvas opens nothing
-		perfSquareCorners: false       // LiteGraph.ROUND_RADIUS -> 0
+		blockOutputDropSearch: false   // true = an output wire dropped on empty canvas opens nothing
 	};
 
 	const FIXED = {
@@ -539,39 +542,6 @@
 	}
 
 	window.NukeVueNodes = NukeVueNodes;
-
-	/* =====================================================================
-	 * PERFORMANCE — SQUARE CORNERS
-	 *
-	 * Jorge pidió switches de rendimiento para la Linux (v17.6x). De los cuatro
-	 * se queda el que él usa: esquinas cuadradas (`LiteGraph.ROUND_RADIUS` a 0,
-	 * cuatro arcos menos por nodo en cada frame).
-	 *
-	 * ⚑ LO ORIGINAL SE LEE UNA VEZ, antes de escribir nada: apagarlo devuelve
-	 * el radio con el que el frontend nació, no un número inventado aquí.
-	 * ===================================================================== */
-	class NukePerformance {
-		static available() {
-			try {
-				return typeof LiteGraph !== 'undefined' && typeof LiteGraph.ROUND_RADIUS === 'number';
-			} catch (e) { return false; }
-		}
-
-		static apply(cfg) {
-			if (!NukePerformance.available()) return false;
-			if (NukePerformance._radius === undefined) NukePerformance._radius = LiteGraph.ROUND_RADIUS;
-			LiteGraph.ROUND_RADIUS = (cfg && cfg.perfSquareCorners) ? 0 : NukePerformance._radius;
-			try {
-				const c = (typeof app !== 'undefined') ? app.canvas : null;
-				if (c) {
-					c.dirty_canvas = true;
-					c.dirty_bgcanvas = true;
-					if (c.setDirty) c.setDirty(true, true);
-				}
-			} catch (e) {}
-			return true;
-		}
-	}
 
 	// ---- NUKE BACKDROPS / GROUPS ENHANCEMENT ENGINE ----
 	class NukeBackdropManager {
@@ -1565,7 +1535,6 @@
 					ImissNukeManager.setupAutoConnectOnAdd();
 					if (window.NukePipeRenderer) window.NukePipeRenderer.init(app.canvas);
 					NukeBackdropManager.init();
-					NukePerformance.apply(config);
 					// ⚑ mount, not just repaint. A second init() is what the panel
 					// toggle and ComfyUI's own setup() both call, and it is the only
 					// chance the button gets to walk to the tip on a page that is
@@ -1594,7 +1563,6 @@
 			ImissNukeUI.updateTopBarState();
 			if (window.NukePipeRenderer) window.NukePipeRenderer.init(typeof app !== 'undefined' ? app.canvas : null);
 			NukeBackdropManager.init();
-			NukePerformance.apply(config);
 			ImissNukeManager.setupAutoConnectOnAdd();
 			ImissNukeManager.syncComfyNavigationMode(config.lmbBoxSelect);
 			ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
@@ -1617,14 +1585,12 @@
 				ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
 				ImissNukeManager.setupAutoConnectOnAdd();
 				ImissNukeManager.setupLinkReleaseBlock();
-				NukePerformance.apply(config);
 			}, 500);
 			setTimeout(() => {
 				ImissNukeManager.syncComfyNavigationMode(config.lmbBoxSelect);
 				ImissNukeManager.syncInstantPlacement(config.nukeInstantPlacement);
 				ImissNukeManager.setupAutoConnectOnAdd();
 				ImissNukeManager.setupLinkReleaseBlock();
-				NukePerformance.apply(config);
 			}, 1500);
 		}
 
@@ -6246,7 +6212,6 @@
 		palette: '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.8 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1a1.6 1.6 0 0 1 1.6-1.7h2c3 0 5.6-2.5 5.6-5.6C22 6 17.5 2 12 2z"/>',
 		group: '<rect x="3" y="4" width="18" height="16" rx="2" stroke-dasharray="3 2.6"/><path d="M3 9h18"/>',
 		searchOff: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="7" y1="7" x2="15" y2="15"/>',
-		square: '<rect x="4" y="4" width="16" height="16"/><path d="M4 9V4h5"/>',
 		sync: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
 		chevDown: '<path d="M6 9l6 6 6-6"/>',
 		chevRight: '<path d="M9 6l6 6-6 6"/>',
@@ -6274,7 +6239,8 @@
 		save: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
 		upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
 		trash: '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
-		check: '<polyline points="20 6 9 17 4 12"/>'
+		check: '<polyline points="20 6 9 17 4 12"/>',
+		folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
 	};
 
 	function inIco(name, size) {
@@ -6300,14 +6266,69 @@
 	 * ===================================================================== */
 	const PRESET_LS = 'imissnuke_presets_v1';
 	const PRESET_FILE = 'imissnuke/presets.json';
-	const IN_PRESETS = { list: [], active: '' };
+	const IN_PRESETS = { list: [], active: '', userDir: '' };
+	window.__imissNukePresets = IN_PRESETS;   // para la consola, como __imissNukeConfig
+
+	function inApiObj() {
+		return (typeof app !== 'undefined' && app && app.api)
+			|| (window.comfyAPI && window.comfyAPI.api && window.comfyAPI.api.api) || null;
+	}
 
 	function inFetch(path, opts) {
-		const a = (typeof app !== 'undefined' && app && app.api)
-			|| (window.comfyAPI && window.comfyAPI.api && window.comfyAPI.api.api) || null;
+		const a = inApiObj();
 		if (a && typeof a.fetchApi === 'function') return a.fetchApi(path, opts);
 		if (typeof fetch === 'function') return fetch(path, opts);
 		return Promise.reject(new Error('no fetch'));
+	}
+
+	/* WHERE THE FILE IS, spelled out like the Hotbox's path box (Jorge: "pon
+	   donde está la ruta de donde se guarda así como el hotbox"). /userdata
+	   writes into ComfyUI's user folder: the --user-directory ComfyUI was
+	   started with, else --base-directory + user, else the folder next to
+	   custom_nodes — ComfyUI's own layout, which is what a plain
+	   `python main.py` (the Linux workstation) has. No Python of ours is
+	   needed, so the baked copy says the same. */
+	function inPathJoin(base, ...parts) {
+		const s = String(base).indexOf('\\') >= 0 ? '\\' : '/';
+		return [String(base).replace(/[\\/]+$/, '')].concat(parts).join(s);
+	}
+
+	function inPresetsDir() {
+		const a = inApiObj();
+		return inPathJoin(IN_PRESETS.userDir || 'ComfyUI/user', (a && a.user) || 'default', 'imissnuke');
+	}
+
+	function inPresetsPath() {
+		return inPathJoin(inPresetsDir(), 'presets.json');
+	}
+
+	function inPresetsWhere() {
+		const a = inApiObj();
+		let p;
+		try { p = inFetch('/system_stats'); } catch (e) { return Promise.resolve(); }
+		return Promise.resolve(p)
+			.then(r => (r && r.ok ? r.json() : null))
+			.then(st => {
+				const v = (st && st.system && st.system.argv) || [];
+				const ud = v.indexOf('--user-directory'), bd = v.indexOf('--base-directory');
+				if (ud >= 0 && v[ud + 1]) return String(v[ud + 1]);
+				if (bd >= 0 && v[bd + 1]) return inPathJoin(v[bd + 1], 'user');
+				if (typeof fetch !== 'function') return '';
+				return fetch(((a && a.api_base) || '') + '/internal/folder_paths')
+					.then(r => (r && r.ok ? r.json() : null))
+					.then(fp => {
+						const cn = fp && fp.custom_nodes;
+						const dir = Array.isArray(cn) ? (Array.isArray(cn[0]) ? cn[0][0] : cn[0]) : '';
+						const m = String(dir || '').match(/^(.*?)[\\/]+custom_nodes[\\/]*$/i);
+						return m ? inPathJoin(m[1], 'user') : '';
+					});
+			})
+			.then(dir => {
+				if (!dir) return;
+				IN_PRESETS.userDir = dir;
+				if (ImissNukeUI.isOpen() && typeof ImissNukeUI._naming !== 'string') ImissNukeUI.render();
+			})
+			.catch(() => {});
 	}
 
 	function inEsc(s) {
@@ -6381,7 +6402,7 @@
 		return Promise.resolve(p)
 			.then(r => { if (!r || !r.ok) throw new Error('HTTP ' + (r && r.status)); })
 			.catch(() => {
-				ImissNukeUI._msg = { text: 'Could not write the presets file · kept in this browser', cls: 'err' };
+				ImissNukeUI._msg = { text: 'Could not write the presets file · kept in this browser', cls: 'err', at: 'presets' };
 				if (ImissNukeUI.isOpen() && typeof ImissNukeUI._naming !== 'string') ImissNukeUI.render();
 			});
 	}
@@ -6737,10 +6758,7 @@
 					tip: 'Groups as Nuke backdrops, with run / bypass / mute buttons.' },
 				{ key: 'blockOutputDropSearch', icon: 'searchOff', label: 'Output Drop', kind: 'toggle',
 					onText: 'Search Blocked', offText: 'Search Opens',
-					tip: 'A wire dropped on empty canvas opens the search, or nothing.' },
-				{ key: 'perfSquareCorners', icon: 'square', label: 'Square Corners', kind: 'toggle',
-					when: () => NukePerformance.available(),
-					tip: 'Square node corners. Faster on big graphs.' }
+					tip: 'A wire dropped on empty canvas opens the search, or nothing.' }
 			];
 		}
 
@@ -6811,6 +6829,7 @@
 #imissnuke-modal .in-btns{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 #imissnuke-modal .in-in{width:168px;font:500 12.5px/1.2 Inter,system-ui,sans-serif;color:#e6e6e6;background:#111111;border:1px solid #3a3a3a;border-radius:6px;padding:6px 8px;outline:none}
 #imissnuke-modal .in-in:focus{border-color:#64a8f0}
+#imissnuke-modal .in-path{width:100%;font:500 11px/1.4 "JetBrains Mono",ui-monospace,Consolas,monospace;color:#cfd6e0;background:#161616;border:1px solid #333333;border-radius:6px;padding:6px 8px;word-break:break-all;user-select:text;cursor:text}
 #imissnuke-modal .in-kl{grid-column:1/-1;display:flex;flex-direction:column;gap:1px;margin-top:-4px;padding:4px;background:rgba(0,0,0,.18);border:1px solid #303030;border-radius:6px}
 #imissnuke-modal .in-kr{display:flex;align-items:center;gap:10px;padding:5px 8px;border-radius:6px;border:1px solid transparent}
 #imissnuke-modal .in-kr:hover{background:#262626;border-color:#333333}
@@ -6902,9 +6921,7 @@
 			if (ImissNukeUI._tip) ImissNukeUI._tip.classList.remove('on');
 			const on = config.masterEnabled !== false;
 			const keysOpen = !!ImissNukeUI._keysOpen;
-			// ⚑ a row whose target this frontend has not got is not offered:
-			// a switch that cannot act is worse than no switch
-			const rows = ImissNukeUI.ROWS.filter(r => !r.when || r.when()).map(r => {
+			const rows = ImissNukeUI.ROWS.map(r => {
 				const dim = (r.kind !== 'master' && !on) || (r.needs && !config[r.needs]);
 				const cls = dim ? ' in-off' : '';
 				const tip = ` data-in-tip="${inEsc(r.tip)}"`;
@@ -6913,6 +6930,9 @@
 			}).join('');
 			const nMod = Object.keys(keymapOverrides(keymap)).length;
 			const kmsg = ImissNukeUI._kmsg, msg = ImissNukeUI._msg;
+			// a message shows under the row whose button made it
+			const msgAt = (at) => (msg && (msg.at || 'backup') === at
+				? `<div class="in-st ${msg.cls}">${inEsc(msg.text)}</div>` : '');
 			const keyList = keysOpen
 				? `<div class="in-kl">${ImissNukeUI.KEYS.map(ImissNukeUI.keyRow).join('')}`
 					+ (kmsg ? `<div class="in-st ${kmsg.cls}">${inEsc(kmsg.text)}</div>` : '') + `</div>`
@@ -6932,12 +6952,20 @@
 					+ `</div>`
 					+ keyList
 					+ `<label class="in-l">${inIco('bookmark', 14)}<span>Presets</span></label>`
-					+ `<div class="in-c">${ImissNukeUI.presetsHTML()}</div>`
+					+ `<div class="in-c">${ImissNukeUI.presetsHTML()}${msgAt('presets')}</div>`
+					+ `<label class="in-l">${inIco('folder', 14)}<span>Saved In</span></label>`
+					+ `<div class="in-c">`
+						+ `<div class="in-path" data-in-tip="Your presets are written to this file, so they follow you to any browser on this ComfyUI">${inEsc(inPresetsPath())}</div>`
+						+ `<div class="in-btns">`
+							+ `<button type="button" class="in-b" data-in-copy="file" data-in-tip="Copy the full path of the file">${inIco('copy', 13)}<span>Copy Path</span></button>`
+							+ `<button type="button" class="in-b" data-in-copy="dir" data-in-tip="Copy the path of the folder">${inIco('copy', 13)}<span>Copy Folder Path</span></button>`
+						+ `</div>${msgAt('path')}`
+					+ `</div>`
 					+ `<label class="in-l">${inIco('save', 14)}<span>Backup &amp; Share</span></label>`
 					+ `<div class="in-c"><div class="in-btns">`
 						+ `<button type="button" class="in-b" data-in-export data-in-tip="Download your presets as a .json: a backup, or to give to someone">${inIco('save', 13)}<span>Download a Copy</span></button>`
 						+ `<button type="button" class="in-b" data-in-import data-in-tip="Open an ImissNuke presets .json. Its presets join yours; nothing is overwritten">${inIco('upload', 13)}<span>Load from File…</span></button>`
-					+ `</div>${msg ? `<div class="in-st ${msg.cls}">${inEsc(msg.text)}</div>` : ''}</div>`
+					+ `</div>${msgAt('backup')}</div>`
 				+ `</div>`
 				+ `<div class="in-foot">`
 					+ `<button type="button" class="in-b ghost" data-in-reset data-in-tip="Factory settings and keys. Saved presets stay">${inIco('sync', 12)}<span>Reset to Defaults</span></button>`
@@ -7015,7 +7043,7 @@
 					IN_PRESETS.list = IN_PRESETS.list.filter(p => p.name !== name);
 					IN_PRESETS.active = '';
 					ImissNukeUI._delArm = false;
-					ImissNukeUI._msg = { text: `Deleted “${name}”`, cls: '' };
+					ImissNukeUI._msg = { text: `Deleted “${name}”`, cls: '', at: 'presets' };
 					inPresetsSave();
 					ImissNukeUI.render();
 				};
@@ -7052,6 +7080,18 @@
 			}
 			const im = $('[data-in-import]');
 			if (im) im.onclick = () => ImissNukeUI.importFile();
+			modal.querySelectorAll('[data-in-copy]').forEach(b => {
+				b.onclick = () => {
+					const dir = b.getAttribute('data-in-copy') === 'dir';
+					const text = dir ? inPresetsDir() : inPresetsPath();
+					// no clipboard (http, an old browser): the path itself, to select
+					const said = (ok) => {
+						ImissNukeUI._msg = { text: ok ? `✓ ${dir ? 'Folder path' : 'Path'} copied` : text, cls: ok ? 'ok' : '', at: 'path' };
+						if (ImissNukeUI.isOpen()) ImissNukeUI.render();
+					};
+					try { navigator.clipboard.writeText(text).then(() => said(true), () => said(false)); } catch (e) { said(false); }
+				};
+			});
 
 			const rb = $('[data-in-reset]');
 			if (rb) {
@@ -7071,7 +7111,6 @@
 			window.__imissNukeConfig = config;
 			saveConfig(config);
 			ImissNukeUI.updateTopBarState();
-			if (key === 'perfSquareCorners' || key === '*') NukePerformance.apply(config);
 			ImissNukeUI.refreshCanvas();
 			ImissNukeUI.render();
 		}
@@ -7126,7 +7165,7 @@
 			else IN_PRESETS.list.push(p);
 			IN_PRESETS.active = p.name;
 			ImissNukeUI._delArm = false;
-			ImissNukeUI._msg = { text: `✓ ${old ? 'Updated' : 'Saved'} “${p.name}”`, cls: 'ok' };
+			ImissNukeUI._msg = { text: `✓ ${old ? 'Updated' : 'Saved'} “${p.name}”`, cls: 'ok', at: 'presets' };
 			inPresetsSave();
 			ImissNukeUI.render();
 		}
@@ -7174,6 +7213,7 @@
 			ImissNukeUI.setupTopBarMounting();
 			ImissNukeUI.render();
 			inPresetsLoad();
+			inPresetsWhere();
 
 			window.addEventListener('keydown', ImissNukeUI.onBindKey, true);
 
