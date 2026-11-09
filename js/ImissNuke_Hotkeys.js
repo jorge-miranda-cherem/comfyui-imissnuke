@@ -23,8 +23,10 @@
  *  - Shift + ↑: Seleccionar lo que alimenta a la selección
  *  - L: Acomodar la selección (Layout)
  *
- * Settings: el panel de la N (v2, 2026-11-08) — pocos y con su frase; lo
- * demás es fijo. Ver CONFIG abajo.
+ * Settings: el panel de la N (v2, 2026-11-08) — pocos, con su tip al pasar
+ * el mouse; lo demás es fijo. Ver CONFIG abajo. v2.1 (2026-11-09): las
+ * teclas de arriba se cambian en el panel (Shortcuts) y todo cabe en un
+ * preset (Save / Download a Copy / Load from File…, como el Hotbox).
  * ============================================================================
  */
 
@@ -160,6 +162,135 @@
 
 	const config = loadConfig();
 	window.__imissNukeConfig = config;
+
+	/* =====================================================================
+	 * TECLAS QUE SE CAMBIAN (remap) — como la tecla del Hotbox
+	 *
+	 * Jorge: "quiero iconos ahí y opción de remap". Cada atajo de TECLADO es
+	 * un binding { key, code, mods } y el handler pregunta `inKey(e, id)` en
+	 * vez de traer la tecla escrita. Se guarda sólo lo que cambió respecto a
+	 * fábrica (imissnuke_keymap_v1), así que una tecla nueva de fábrica le
+	 * llega a todos. Los gestos de mouse y el Tab no se cambian.
+	 *
+	 *   mods:     'ctrl+' 'alt+' 'shift+', en ese orden; Cmd cuenta como Ctrl
+	 *   anyShift: Shift no importa — la "/" en un teclado en español ES
+	 *             Shift+7, y Ctrl+Shift+X hace lo mismo que Ctrl+X
+	 * ===================================================================== */
+	const IN_KEY_DEFAULTS = {
+		find:      { key: '/', code: '', mods: '', anyShift: true },
+		frame:     { key: 'f', code: 'KeyF', mods: '' },
+		layout:    { key: 'l', code: 'KeyL', mods: '' },
+		bypass:    { key: 'd', code: 'KeyD', mods: '' },
+		upstream:  { key: 'arrowup', code: 'ArrowUp', mods: 'shift+' },
+		hideLinks: { key: 'h', code: 'KeyH', mods: 'alt+' },
+		duplicate: { key: 'd', code: 'KeyD', mods: 'ctrl+' },
+		clone:     { key: 'e', code: 'KeyE', mods: 'ctrl+' },
+		connect:   { key: 'q', code: 'KeyQ', mods: 'shift+' },
+		color:     { key: 'c', code: 'KeyC', mods: 'ctrl+shift+' },
+		extract:   { key: 'x', code: 'KeyX', mods: 'ctrl+shift+', anyShift: true },
+		swap:      { key: 's', code: 'KeyS', mods: 'ctrl+shift+' },
+		splice:    { key: 'i', code: 'KeyI', mods: 'ctrl+shift+' },
+		queue:     { key: 'r', code: 'KeyR', mods: 'shift+' }
+	};
+	const KEY_STORE = 'imissnuke_keymap_v1';
+
+	function inKeyNorm(b) {
+		if (!b || typeof b !== 'object') return null;
+		const key = String(b.key || '').toLowerCase(), code = String(b.code || '');
+		if (!key && !code) return null;
+		const out = { key, code, mods: String(b.mods || '') };
+		if (b.anyShift) out.anyShift = true;   // only when it says something
+		return out;
+	}
+
+	function inKeySame(a, b) {
+		if (!a || !b) return !a && !b;
+		return a.key === b.key && a.code === b.code && a.mods === b.mods && !!a.anyShift === !!b.anyShift;
+	}
+
+	// Two bindings that the same press would fire
+	function inKeyClash(a, b) {
+		if (!a || !b) return false;
+		const shiftFree = a.anyShift || b.anyShift;
+		const ma = shiftFree ? a.mods.replace('shift+', '') : a.mods;
+		const mb = shiftFree ? b.mods.replace('shift+', '') : b.mods;
+		return ma === mb && ((!!a.code && a.code === b.code) || (!!a.key && a.key === b.key));
+	}
+
+	// overrides { id: binding | null } -> the whole map
+	function buildKeymap(over) {
+		const km = {};
+		for (const id of Object.keys(IN_KEY_DEFAULTS)) {
+			const has = over && typeof over === 'object' && Object.prototype.hasOwnProperty.call(over, id);
+			km[id] = has ? inKeyNorm(over[id]) : { ...IN_KEY_DEFAULTS[id] };
+		}
+		return km;
+	}
+
+	function keymapOverrides(km) {
+		const out = {};
+		for (const id of Object.keys(IN_KEY_DEFAULTS)) {
+			const b = km && km[id] ? inKeyNorm(km[id]) : null;
+			if (!inKeySame(b, inKeyNorm(IN_KEY_DEFAULTS[id]))) out[id] = b;
+		}
+		return out;
+	}
+
+	function loadKeymap() {
+		let over = null;
+		try { over = JSON.parse(localStorage.getItem(KEY_STORE) || 'null'); } catch (e) { over = null; }
+		return buildKeymap(over);
+	}
+
+	function saveKeymap(km) {
+		try { localStorage.setItem(KEY_STORE, JSON.stringify(keymapOverrides(km))); } catch (e) {}
+	}
+
+	const keymap = loadKeymap();
+	window.__imissNukeKeys = keymap;
+
+	function inKeyMods(e) {
+		return (e.ctrlKey || e.metaKey ? 'ctrl+' : '') + (e.altKey ? 'alt+' : '') + (e.shiftKey ? 'shift+' : '');
+	}
+
+	// Does this press fire the action `id`?
+	function inKey(e, id) {
+		const b = (window.__imissNukeKeys || keymap)[id];
+		if (!b || !e) return false;
+		let m = inKeyMods(e), bm = b.mods || '';
+		if (b.anyShift) { m = m.replace('shift+', ''); bm = bm.replace('shift+', ''); }
+		if (m !== bm) return false;
+		if (b.code && e.code === b.code) return true;
+		return !!b.key && String(e.key || '').toLowerCase() === b.key;
+	}
+
+	function inKeyLabel(b) {
+		if (!b) return '—';
+		const c = String(b.code || ''), k = String(b.key || '');
+		const names = { arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→', ' ': 'Space', escape: 'Esc', backquote: '`' };
+		const base = /^Key[A-Z]$/.test(c) ? c.slice(3)
+			: names[k] ? names[k]
+			: k.length === 1 ? k.toUpperCase()
+			: k ? k[0].toUpperCase() + k.slice(1)
+			: c;
+		const m = String(b.mods || '');
+		return (m.includes('ctrl+') ? 'Ctrl+' : '') + (m.includes('alt+') ? 'Alt+' : '')
+			+ (m.includes('shift+') ? 'Shift+' : '') + base;
+	}
+
+	// Keys a remap may not take: the Tab, and what ComfyUI and the browser
+	// need (copy, paste, undo, save, run…). '' = free.
+	function inKeyReserved(b) {
+		const k = b.key, m = b.mods;
+		const letter = /^Key[A-Z]$/.test(b.code) ? b.code.slice(3).toLowerCase() : k;
+		if (k === 'tab') return 'Tab is the node search';
+		if (k === 'enter' || k === ' ' || /^f(5|11|12)$/.test(k)
+			|| (m === 'ctrl+' && 'cvzyaso'.includes(letter) && letter.length === 1)
+			|| (m === 'ctrl+shift+' && (letter === 'z' || letter === 'v'))) {
+			return `${inKeyLabel(b)} belongs to ComfyUI`;
+		}
+		return '';
+	}
 
 	// ---- UTILIDADES MATEMÁTICAS PURAS (100% ORIGINALES) ----
 	class GeometryUtils {
@@ -4154,6 +4285,7 @@
 				// hoy el control del seed, y las flechas son suyas cuando tiene
 				// el foco. Ver typingInWidget.
 				if (ImissNukeManager.typingInWidget(e.target)) return;
+				if (ImissNukeUI._binding) return;   // the panel is taking a new key
 				if (typeof app === 'undefined' || !app.canvas || !app.graph) return;
 				if (window.__imissNukeConfig && window.__imissNukeConfig.masterEnabled === false) return;
 
@@ -4169,7 +4301,7 @@
 				// ---- /: Find Node — el Search de Nuke ----
 				// ⚑ Por `e.key` y no por `code`, y sin mirar Shift: en un teclado
 				// en español la barra ES Shift+7, y lo que importa es el carácter.
-				if (e.key === '/' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+				if (inKey(e, 'find')) {
 					e.preventDefault();
 					e.stopPropagation();
 					ImissNukeFind.open();
@@ -4177,7 +4309,7 @@
 				}
 
 				// ---- Shift+R: Renderizar / Encolar nodos de salida seleccionados ----
-				if (e.shiftKey && !e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
+				if (inKey(e, 'queue')) {
 					e.preventDefault();
 					e.stopPropagation();
 					ImissNukeManager.queueSelected();
@@ -4188,8 +4320,7 @@
 				// ⚡ Se sale SIN consumir la tecla cuando no hay nada que
 				// agregar — la misma salida que la L, y lo que deja a esta
 				// flecha nacer prendida sin quitarle nada a ComfyUI.
-				if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey
-					&& (e.key === 'ArrowUp' || e.code === 'ArrowUp')) {
+				if (inKey(e, 'upstream')) {
 					const cfgUp = window.__imissNukeConfig || loadConfig();
 					if (cfgUp && cfgUp.nukeSelectUpstream === false) return;
 					if (!ImissNukeManager.selectUpstream()) return;
@@ -4199,7 +4330,7 @@
 				}
 
 				// ---- Key F: Focus / Frame selección o grafo completo ----
-				if (!e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'f' || e.key === 'F' || e.code === 'KeyF')) {
+				if (inKey(e, 'frame')) {
 					e.preventDefault();
 					e.stopPropagation();
 					const selectedNodes = Object.values(app.canvas.selected_nodes || {});
@@ -4211,7 +4342,7 @@
 				// ---- Key L: Layout — acomoda la seleccion como Nuke ----
 				// Sin modificadores, como la L de Nuke. Se sale sin consumir la
 				// tecla cuando no hay seleccion, para no robarle la L a nada.
-				if (!e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'l' || e.key === 'L' || e.code === 'KeyL')) {
+				if (inKey(e, 'layout')) {
 					const selL = app.canvas.selected_nodes;
 					if (!selL || Object.keys(selL).length < 2) return;
 					e.preventDefault();
@@ -4221,7 +4352,7 @@
 				}
 
 				// ---- Key D: Bypass / Disable (o Mute) ----
-				if (!e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'd' || e.key === 'D' || e.code === 'KeyD')) {
+				if (inKey(e, 'bypass')) {
 					const selected = app.canvas.selected_nodes;
 					if (!selected || Object.keys(selected).length === 0) return;
 
@@ -4244,7 +4375,7 @@
 				}
 
 				// ---- Alt+H: Hide Inputs / Set&Get Links ----
-				if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'h' || e.key === 'H' || e.code === 'KeyH')) {
+				if (inKey(e, 'hideLinks')) {
 					const selected = app.canvas.selected_nodes;
 					if (!selected || Object.keys(selected).length === 0) return;
 
@@ -4303,7 +4434,7 @@
 				}
 
 				// ---- Ctrl+D: Duplicar SIN conexiones ----
-				if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D' || e.code === 'KeyD')) {
+				if (inKey(e, 'duplicate')) {
 					e.preventDefault();
 					e.stopPropagation();
 					const selected = app.canvas.selected_nodes;
@@ -4344,7 +4475,7 @@
 				}
 
 				// ---- Ctrl+E: Clonar CON conexiones de entrada ----
-				if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'e' || e.key === 'E' || e.code === 'KeyE')) {
+				if (inKey(e, 'clone')) {
 					e.preventDefault();
 					e.stopPropagation();
 					const selected = app.canvas.selected_nodes;
@@ -4398,7 +4529,7 @@
 
 				// ---- Shift+Q: conectar lo que se tiene que conectar ----
 				// (las reglas viven en `smartConnect` / `sqBest`)
-				if (e.shiftKey && (e.key === 'q' || e.key === 'Q')) {
+				if (inKey(e, 'connect')) {
 					e.preventDefault();
 					e.stopPropagation();
 
@@ -4415,7 +4546,7 @@
 				}
 
 				// ---- Ctrl+Shift+C: Paleta de color para nodos y grupos ----
-				if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'c' || e.key === 'C' || e.code === 'KeyC')) {
+				if (inKey(e, 'color')) {
 					// ⚑ v19.12 — la misma tecla la cierra
 					if (ImissNukeColorPicker.S.el) { e.preventDefault(); e.stopPropagation(); ImissNukeColorPicker.close(); return; }
 					const canvas = app.canvas;
@@ -4483,7 +4614,7 @@
 				}
 
 				// ---- Ctrl+X / Ctrl+Shift+X: Extraer nodo (1 nodo) o Swap (2 nodos) ----
-				if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyX' || e.key === 'x' || e.key === 'X' || e.keyCode === 88)) {
+				if (inKey(e, 'extract')) {
 					const canvas = app.canvas;
 					const graph = app.graph;
 					if (!canvas || !graph) return;
@@ -4509,7 +4640,7 @@
 				}
 
 				// ---- Ctrl+Shift+S: Sustituir / Intercambiar nodos (Swap sin borrar) ----
-				if (e.ctrlKey && e.shiftKey && (e.key === 's' || e.key === 'S' || e.code === 'KeyS')) {
+				if (inKey(e, 'swap')) {
 					const canvas = app.canvas;
 					const graph = app.graph;
 					const ordered = ImissNukeManager.getOrderedSelectedNodes(canvas);
@@ -4522,7 +4653,7 @@
 				}
 
 				// ---- Ctrl+Shift+I: Intercalar nodo en cable ----
-				if (e.ctrlKey && e.shiftKey && (e.key === 'i' || e.key === 'I' || e.code === 'KeyI')) {
+				if (inKey(e, 'splice')) {
 					const canvas = app.canvas;
 					const graph = app.graph;
 					const ordered = ImissNukeManager.getOrderedSelectedNodes(canvas);
@@ -6069,16 +6200,24 @@
 	 * homologar incluso el icono, la experiencia de los settings."
 	 *
 	 * El chip es el de la H: 32 px, radio 8, gris apagado; prendido, la marca
-	 * en color sobre un fondo oscuro teñido (la H es amarilla sobre ciruela, la
-	 * N es naranja sobre café). La marca es la del kit de marca de Jorge
+	 * en color sobre un fondo oscuro teñido: la N, como la H, amarilla sobre
+	 * ciruela. La marca es la del kit de marca de Jorge
 	 * (assets/brand, "Minilogo"): la N dentro de un pipe con el codo a 45° de
-	 * Nuke, dos salidas a la izquierda y el slot a la derecha, en el naranja
-	 * de la marca #E58A2E. El panel es el de Hotbox Settings: grid
+	 * Nuke, dos salidas a la izquierda y el slot a la derecha, en Comfy
+	 * Yellow #F2FF59 sobre #211927. El panel es el de Hotbox Settings: grid
 	 * con ícono por fila, botones ● / ○, botones que ciclan con puntitos, y
 	 * Done abajo. Clic derecho en la N prende o apaga todo, como la H.
+	 *
+	 * v2.1 (2026-11-09) — Jorge: "no respetaste el amarillo que quedamos en
+	 * el design. sigue siendo mucho texto… quiero íconos ahí y opción de
+	 * remap y un save presets y export presets como hotbox". La N es
+	 * amarilla sobre ciruela como la H (el naranja se queda en assets/brand
+	 * como alterno); cada fila dice lo suyo en un tip al pasar el mouse; las
+	 * teclas son filas con ícono y un chip que se cambia con un clic; y los
+	 * presets son los del Hotbox.
 	 * ===================================================================== */
-	const IN_LOGO = { bg: '#2a1d13', fg: '#E58A2E' };
-	// assets/brand/svg/imissnuke-mark-orange.svg, in currentColor
+	const IN_LOGO = { bg: '#211927', fg: '#F2FF59' };
+	// assets/brand/svg/imissnuke-comfy-classic-mark-yellow.svg, in currentColor
 	const IN_MARK =
 		'<g fill="currentColor">' +
 		'<rect x="11.5" y="10.5" width="3" height="11" rx="1"/><rect x="17.5" y="10.5" width="3" height="11" rx="1"/>' +
@@ -6110,12 +6249,211 @@
 		square: '<rect x="4" y="4" width="16" height="16"/><path d="M4 9V4h5"/>',
 		sync: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
 		chevDown: '<path d="M6 9l6 6 6-6"/>',
-		chevRight: '<path d="M9 6l6 6-6 6"/>'
+		chevRight: '<path d="M9 6l6 6-6 6"/>',
+		// v2.1: the key list and the presets
+		box: '<rect x="3" y="3" width="15" height="15" rx="1" stroke-dasharray="3 2.4"/><path d="M12 12l8.5 3.4-3.5 1.2-1.2 3.5z"/>',
+		zoom: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>',
+		search: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+		hash: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
+		frame: '<path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
+		layout: '<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v2h12V9M12 11v4"/>',
+		bypass: '<rect x="7" y="7" width="10" height="10" rx="2" stroke-dasharray="2.5 2"/><path d="M2 12h20"/>',
+		arrowUp: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
+		eyeOff: '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
+		copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+		clone: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M15 9V5a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M1 15h8"/>',
+		plug: '<path d="M9 2v6M15 2v6"/><path d="M6 8h12v4a6 6 0 0 1-12 0z"/><path d="M12 18v4"/>',
+		scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>',
+		swap: '<path d="M16 3l4 4-4 4"/><path d="M20 7H4"/><path d="M8 21l-4-4 4-4"/><path d="M4 17h16"/>',
+		splice: '<path d="M2 12h5M17 12h5"/><rect x="7" y="8" width="10" height="8" rx="2"/><path d="M12 2v3"/>',
+		play: '<polygon points="6 4 20 12 6 20 6 4"/>',
+		dropWire: '<path d="M2 19h20"/><rect x="8" y="3" width="8" height="7" rx="1.5"/><path d="M12 10v5M9.5 12.5L12 15l2.5-2.5"/>',
+		dropSwap: '<rect x="3" y="3" width="8" height="7" rx="1.5"/><rect x="13" y="14" width="8" height="7" rx="1.5"/><path d="M15 6.5h2.5a2 2 0 0 1 2 2V11M9 17.5H6.5a2 2 0 0 1-2-2V13"/>',
+		bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+		floppy: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+		save: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+		upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+		trash: '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+		check: '<polyline points="20 6 9 17 4 12"/>'
 	};
 
 	function inIco(name, size) {
 		const s = size || 15;
 		return `<svg class="in-ico" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IN_ICONS[name] || ''}</svg>`;
+	}
+
+	/* =====================================================================
+	 * PRESETS — los del Hotbox (Save / Download a Copy / Load from File…)
+	 *
+	 * Jorge: "un save presets y export presets como hotbox… esa sí róbala de
+	 * ahí". Un preset es { name, settings, keys }: los settings del panel y
+	 * las teclas que no son las de fábrica. La lista vive en el user folder de
+	 * ComfyUI (imissnuke/presets.json, por /userdata, igual que el hotbox.json)
+	 * para que siga a Jorge a cualquier navegador, con una copia en
+	 * localStorage para arrancar sin esperar al servidor.
+	 *
+	 *   Save Preset…      guarda lo que está en uso con un nombre; el mismo
+	 *                     nombre lo actualiza
+	 *   el botón que cicla pasa al siguiente preset y lo aplica
+	 *   Download a Copy   baja la lista (un respaldo, o para pasarla)
+	 *   Load from File…   sus presets se suman a los tuyos; nada se pisa
+	 * ===================================================================== */
+	const PRESET_LS = 'imissnuke_presets_v1';
+	const PRESET_FILE = 'imissnuke/presets.json';
+	const IN_PRESETS = { list: [], active: '' };
+
+	function inFetch(path, opts) {
+		const a = (typeof app !== 'undefined' && app && app.api)
+			|| (window.comfyAPI && window.comfyAPI.api && window.comfyAPI.api.api) || null;
+		if (a && typeof a.fetchApi === 'function') return a.fetchApi(path, opts);
+		if (typeof fetch === 'function') return fetch(path, opts);
+		return Promise.reject(new Error('no fetch'));
+	}
+
+	function inEsc(s) {
+		return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+			({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+	}
+
+	// What is in use right now, as a preset
+	function inPresetNow(name) {
+		const settings = {};
+		for (const k of Object.keys(USER_DEFAULTS)) settings[k] = config[k];
+		return { name: String(name || 'Preset'), settings, keys: keymapOverrides(keymap) };
+	}
+
+	// A preset from a file or the server, made safe: known settings only, of
+	// the right type; keys through the same filter as the keymap
+	function inPresetClean(p) {
+		if (!p || typeof p !== 'object') return null;
+		const name = String(p.name || '').trim().slice(0, 40);
+		if (!name) return null;
+		const s = p.settings && typeof p.settings === 'object' ? p.settings : {};
+		const settings = {};
+		for (const k of Object.keys(USER_DEFAULTS)) {
+			settings[k] = typeof s[k] === typeof USER_DEFAULTS[k] ? s[k] : USER_DEFAULTS[k];
+		}
+		const keys = keymapOverrides(buildKeymap(p.keys && typeof p.keys === 'object' ? p.keys : {}));
+		return { name, settings, keys };
+	}
+
+	function inPresetsPayload() {
+		return { imissnuke_presets: 1, saved_at: new Date().toISOString(), active: IN_PRESETS.active, presets: IN_PRESETS.list };
+	}
+
+	function inPresetsAdopt(d) {
+		if (!d || typeof d !== 'object' || !Array.isArray(d.presets)) return false;
+		const seen = new Set(), list = [];
+		for (const raw of d.presets) {
+			const p = inPresetClean(raw);
+			if (!p || seen.has(p.name.toLowerCase())) continue;
+			seen.add(p.name.toLowerCase());
+			list.push(p);
+		}
+		IN_PRESETS.list = list;
+		IN_PRESETS.active = list.some(p => p.name === d.active) ? d.active : '';
+		return true;
+	}
+
+	function inPresetsLoad() {
+		try { inPresetsAdopt(JSON.parse(localStorage.getItem(PRESET_LS) || 'null')); } catch (e) {}
+		let p;
+		try { p = inFetch('/userdata/' + encodeURIComponent(PRESET_FILE), { cache: 'no-store' }); } catch (e) { return Promise.resolve(); }
+		return Promise.resolve(p)
+			.then(r => (r && r.ok ? r.json() : null))
+			.then(d => {
+				if (!d || !inPresetsAdopt(d)) return;
+				try { localStorage.setItem(PRESET_LS, JSON.stringify(inPresetsPayload())); } catch (e) {}
+				if (ImissNukeUI.isOpen() && typeof ImissNukeUI._naming !== 'string') ImissNukeUI.render();
+			})
+			.catch(() => {});
+	}
+
+	function inPresetsSave() {
+		const body = inPresetsPayload();
+		try { localStorage.setItem(PRESET_LS, JSON.stringify(body)); } catch (e) {}
+		let p;
+		try {
+			p = inFetch('/userdata/' + encodeURIComponent(PRESET_FILE) + '?overwrite=true', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body, null, 2)
+			});
+		} catch (e) { p = Promise.reject(e); }
+		return Promise.resolve(p)
+			.then(r => { if (!r || !r.ok) throw new Error('HTTP ' + (r && r.status)); })
+			.catch(() => {
+				ImissNukeUI._msg = { text: 'Could not write the presets file · kept in this browser', cls: 'err' };
+				if (ImissNukeUI.isOpen() && typeof ImissNukeUI._naming !== 'string') ImissNukeUI.render();
+			});
+	}
+
+	function inPresetFind(name) {
+		const n = String(name || '').toLowerCase();
+		return IN_PRESETS.list.find(p => p.name.toLowerCase() === n) || null;
+	}
+
+	// Changed since the preset in use was applied or saved?
+	function inPresetDirty() {
+		const p = inPresetFind(IN_PRESETS.active);
+		if (!p) return false;
+		const now = inPresetNow(p.name);
+		return JSON.stringify(now.settings) !== JSON.stringify(p.settings)
+			|| JSON.stringify(now.keys) !== JSON.stringify(p.keys);
+	}
+
+	// Keymap in place: every handler reads this same object
+	function inKeymapSet(over) {
+		const km = buildKeymap(over);
+		for (const id of Object.keys(km)) keymap[id] = km[id];
+		saveKeymap(keymap);
+	}
+
+	function inPresetApply(p) {
+		for (const k of Object.keys(USER_DEFAULTS)) config[k] = p.settings[k];
+		inKeymapSet(p.keys);
+		IN_PRESETS.active = p.name;
+	}
+
+	function inStamp() {
+		const d = new Date(), z = n => String(n).padStart(2, '0');
+		return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}`;
+	}
+
+	// The whole list as one .json. With none saved yet, what is in use goes as "My Setup"
+	function inPresetsExport() {
+		const list = IN_PRESETS.list.length ? IN_PRESETS.list : [inPresetNow('My Setup')];
+		const data = { imissnuke_presets: 1, saved_at: new Date().toISOString(), active: IN_PRESETS.active || list[0].name, presets: list };
+		const name = `imissnuke_presets_${inStamp()}.json`;
+		const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = name;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(url), 2000);
+		return name;
+	}
+
+	// A file never overwrites anything: its presets join the list (a name
+	// already taken gets a number), and the one it had in use is applied
+	function inPresetsImport(d) {
+		const src = d && Array.isArray(d.presets) ? d.presets : (d && d.settings ? [d] : []);
+		const added = [];
+		let pick = null;
+		for (const raw of src) {
+			const p = inPresetClean(raw);
+			if (!p) continue;
+			let got = IN_PRESETS.list.find(x => JSON.stringify(x) === JSON.stringify(p));
+			if (!got) {
+				const base = p.name;
+				for (let n = 2; inPresetFind(p.name); n++) p.name = `${base} ${n}`;
+				IN_PRESETS.list.push(p);
+				got = p;
+			}
+			added.push(got);
+			if (!pick && d.active && raw && raw.name === d.active) pick = got;
+		}
+		return { added, pick: pick || added[0] || null };
 	}
 
 	class ImissNukeUI {
@@ -6129,6 +6467,13 @@
 			if (modal) modal.classList.remove('open');
 			const btn = document.getElementById('imissnuke-topbar-btn');
 			if (btn) btn.classList.remove('active', 'open');
+			// a key half-taken, a name half-typed, a delete half-confirmed: dropped
+			ImissNukeUI._binding = null;
+			ImissNukeUI._naming = null;
+			ImissNukeUI._delArm = false;
+			ImissNukeUI._msg = null;
+			ImissNukeUI._kmsg = null;
+			if (ImissNukeUI._tip) ImissNukeUI._tip.classList.remove('on');
 		}
 
 		static toggleModal() {
@@ -6373,53 +6718,57 @@
 		}
 
 		/* The whole panel is this table: one row per setting, each with its
-		   icon and the sentence that says what it does. A row that is not
-		   here is not a setting (see FIXED). */
+		   icon and a short tip on hover. v2.1 (2026-11-09) — Jorge: "sigue
+		   siendo mucho texto", so the sentence under every row is gone and
+		   lives in `tip`. A row that is not here is not a setting (see FIXED). */
 		static get ROWS() {
 			return [
 				{ key: 'masterEnabled', icon: 'power', label: 'ImissNuke', kind: 'master',
-					note: 'Nuke hotkeys, pipes and backdrops, all at once. Right-click the N in the top bar to flip it any time.' },
+					tip: 'Nuke hotkeys, pipes and backdrops. Right-click the N to flip it.' },
 				{ key: 'dKeyMode', icon: 'keyboard', label: 'D Key', kind: 'cycle',
 					opts: ['bypass', 'mute'], names: ['Bypass', 'Mute'],
-					note: 'What D does to the selected nodes: Bypass lets the image pass through them, Mute stops the branch there.' },
+					tip: 'Bypass passes the image through. Mute stops the branch.' },
 				{ key: 'nukeLinesEnabled', icon: 'pipes', label: 'Nuke Pipes', kind: 'toggle',
-					note: 'Straight wires with 45° bends that route around nodes. Off: ComfyUI draws its own wires.' },
+					tip: 'Straight wires with 45° bends. Off: ComfyUI wires.' },
 				{ key: 'lineColorMode', icon: 'palette', label: 'Wire Color', kind: 'cycle', needs: 'nukeLinesEnabled',
 					opts: ['original', 'nukeDark'], names: ['Original Colors', 'Nuke Black'],
-					note: 'Each wire keeps the color of its type, or every wire goes black like in Nuke. Wires into the selection turn amber either way.' },
+					tip: 'Type colors, or all black like Nuke.' },
 				{ key: 'nukeGroupsEnabled', icon: 'group', label: 'Backdrops', kind: 'toggle',
-					note: 'Groups drawn as Nuke backdrops, with header buttons to run, bypass or mute what is inside. Off: ComfyUI draws its own groups.' },
+					tip: 'Groups as Nuke backdrops, with run / bypass / mute buttons.' },
 				{ key: 'blockOutputDropSearch', icon: 'searchOff', label: 'Output Drop', kind: 'toggle',
 					onText: 'Search Blocked', offText: 'Search Opens',
-					note: 'A wire pulled from an output and dropped on empty canvas: opens the node search and wires in the new node, or does nothing.' },
+					tip: 'A wire dropped on empty canvas opens the search, or nothing.' },
 				{ key: 'perfSquareCorners', icon: 'square', label: 'Square Corners', kind: 'toggle',
 					when: () => NukePerformance.available(),
-					note: 'Nodes drawn with square corners: four fewer arcs per node on every frame. Helps on big graphs.' }
+					tip: 'Square node corners. Faster on big graphs.' }
 			];
 		}
 
-		// The Nuke keys this tool adds, in the panel's fold
+		/* The keys, as the Hotbox lists its power tools: icon, short name, key
+		   chip. `id` = a keyboard key from IN_KEY_DEFAULTS, so its chip is a
+		   button that remaps it. `fixed` = a mouse gesture or the Tab: shown,
+		   not changed. What each one does is in `tip`, on hover. */
 		static get KEYS() {
 			return [
-				[['LMB'], 'Drag on empty canvas: box select'],
-				[['MMB', 'LMB'], 'Drag: smooth zoom (Wacom: pen tip + side button)'],
-				[['Tab'], 'Node search at the cursor'],
-				[['/'], 'Find a node by number or name'],
-				[['F'], 'Frame the selection, or the whole graph'],
-				[['L'], 'Lay out the selection'],
-				[['D'], 'Bypass / Mute the selection'],
-				[['Shift', '↑'], 'Select what feeds the selection (again: one more level)'],
-				[['Alt', 'H'], 'Hide inputs / Set & Get links'],
-				[['Ctrl', 'D'], 'Duplicate without links'],
-				[['Ctrl', 'E'], 'Clone with its input links'],
-				[['Shift', 'Q'], 'Connect the selection into the node on the right: image or video first, never into a widget'],
-				[['Ctrl', 'Shift', 'C'], 'Color palette for nodes and groups'],
-				[['Ctrl', 'Shift', 'X'], 'Extract a node and bridge its wires (two nodes: swap them)'],
-				[['Ctrl', 'Shift', 'S'], 'Swap / replace a node'],
-				[['Ctrl', 'Shift', 'I'], 'Splice a node into a wire'],
-				[['Shift', 'Drop'], 'Splice the dragged node onto a wire'],
-				[['Ctrl', 'Shift', 'Drop'], 'Swap the dragged node with the one under it'],
-				[['Shift', 'R'], 'Queue the selected outputs']
+				{ fixed: 'LMB drag', icon: 'box', name: 'Box Select', tip: 'Drag on empty canvas to select.' },
+				{ fixed: 'MMB+LMB', icon: 'zoom', name: 'Smooth Zoom', tip: 'Drag to zoom. Wacom: pen tip + side button.' },
+				{ fixed: 'Tab', icon: 'search', name: 'Node Search', tip: 'Search at the cursor.' },
+				{ id: 'find', icon: 'hash', name: 'Find Node', tip: 'Jump to a node by number or name.' },
+				{ id: 'frame', icon: 'frame', name: 'Frame', tip: 'Fit the selection, or the whole graph.' },
+				{ id: 'layout', icon: 'layout', name: 'Layout', tip: 'Line up the selection along its wires.' },
+				{ id: 'bypass', icon: 'bypass', name: 'Bypass / Mute', tip: 'The D Key setting picks which one.' },
+				{ id: 'upstream', icon: 'arrowUp', name: 'Select Upstream', tip: 'Add what feeds the selection. Again: one more level.' },
+				{ id: 'hideLinks', icon: 'eyeOff', name: 'Hide Links', tip: 'Hide input wires, or Set & Get links.' },
+				{ id: 'duplicate', icon: 'copy', name: 'Duplicate', tip: 'A copy without wires.' },
+				{ id: 'clone', icon: 'clone', name: 'Clone + Inputs', tip: 'A copy that keeps its input wires.' },
+				{ id: 'connect', icon: 'plug', name: 'Connect', tip: 'Wire the selection into the node on the right: image or video first, never a widget.' },
+				{ id: 'color', icon: 'palette', name: 'Color', tip: 'Color palette for nodes and groups.' },
+				{ id: 'extract', icon: 'scissors', name: 'Extract', tip: 'Pull a node out and bridge its wires. Two nodes: swap them.' },
+				{ id: 'swap', icon: 'swap', name: 'Swap Nodes', tip: 'Two selected nodes trade places and wires.' },
+				{ id: 'splice', icon: 'splice', name: 'Splice', tip: 'Put a node into a wire.' },
+				{ id: 'queue', icon: 'play', name: 'Queue Outputs', tip: 'Run only the selected outputs.' },
+				{ fixed: 'Shift+Drop', icon: 'dropWire', name: 'Drop on Wire', tip: 'Drop a dragged node on a wire to splice it in.' },
+				{ fixed: 'Ctrl+Shift+Drop', icon: 'dropSwap', name: 'Drop to Swap', tip: 'Drop a dragged node on another to swap them.' }
 			];
 		}
 
@@ -6431,44 +6780,63 @@
 .imissnuke-topbar-btn .imissnuke-n-icon{display:flex;align-items:center;justify-content:center;color:#71717a !important}
 .imissnuke-topbar-btn .imissnuke-n-icon svg{display:block;width:24px;height:24px}
 .imissnuke-topbar-btn:hover .imissnuke-n-icon{color:#e2e8f0 !important}
-.imissnuke-topbar-btn.tool-on{background:${IN_LOGO.bg} !important;border-color:#47301c !important}
+.imissnuke-topbar-btn.tool-on{background:${IN_LOGO.bg} !important;border-color:#3a2b45 !important}
 .imissnuke-topbar-btn.tool-on .imissnuke-n-icon{color:${IN_LOGO.fg} !important}
-.imissnuke-topbar-btn.tool-on:hover{background:#36261a !important;border-color:#6b4826 !important}
-.imissnuke-topbar-btn.open{box-shadow:0 0 0 2px rgba(243,156,61,.4) !important}
+.imissnuke-topbar-btn.tool-on:hover{background:#2d2236 !important;border-color:#5a4768 !important}
+.imissnuke-topbar-btn.open{box-shadow:0 0 0 2px rgba(242,255,89,.4) !important}
 #imissnuke-modal{position:fixed;top:46px;left:200px;z-index:2147483000;width:min(440px,94vw);max-height:calc(100vh - 60px);overflow-y:auto;background:var(--p-content-background,var(--comfy-menu-bg,#222222));border:1px solid #3c3c3c;border-radius:8px;padding:16px 18px;box-shadow:0 12px 36px rgba(0,0,0,.6);display:none;flex-direction:column;gap:12px;color:#e2e2e2;font:400 12.5px/1.4 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;box-sizing:border-box;text-align:left}
 #imissnuke-modal.open{display:flex}
 #imissnuke-modal *{box-sizing:border-box}
 #imissnuke-modal .in-t{font:600 14px/1.2 Inter,system-ui,sans-serif;color:#e2e2e2;display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid #333333}
-#imissnuke-modal .in-grid{display:grid;grid-template-columns:128px minmax(0,1fr);align-items:start;gap:12px}
+#imissnuke-modal .in-grid{display:grid;grid-template-columns:128px minmax(0,1fr);align-items:start;gap:10px 12px}
 #imissnuke-modal .in-l{display:inline-flex;align-items:center;gap:8px;min-height:30px;white-space:nowrap;color:#9a9a9a;font-weight:500;font-size:12px}
 #imissnuke-modal .in-l .in-ico{color:#7aa7e0;flex:none}
-#imissnuke-modal .in-c{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
-#imissnuke-modal .in-note{font-size:11px;line-height:1.4;color:#8a8a8a}
+#imissnuke-modal .in-c{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0}
 #imissnuke-modal .in-b{display:inline-flex;align-items:center;gap:7px;margin:0;padding:6px 10px;border-radius:6px;border:1px solid #3c3c3c;background:#2a2a2a;color:#f0f0f0;font:500 12.5px/1.2 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s,color .12s}
 #imissnuke-modal .in-b:hover{background:#333333;border-color:#525252;color:#ffffff}
 #imissnuke-modal .in-b.on{background:#2d3542;border-color:#5c94f0;color:#ffffff}
 #imissnuke-modal .in-b.ghost{background:transparent;border-color:transparent;color:#a8a8a8}
 #imissnuke-modal .in-b.ghost:hover{background:#333333;color:#ffffff}
+#imissnuke-modal .in-b.in-sq{padding:6px 8px}
+#imissnuke-modal .in-b.danger{background:#3a1f1f;border-color:#8a3a3a;color:#ffb4a8}
+#imissnuke-modal .in-b small{font-weight:400;opacity:.6}
+#imissnuke-modal .in-b .in-ico{color:#8a8a8a}
 #imissnuke-modal .in-cyc{gap:9px;min-width:168px;justify-content:space-between}
-#imissnuke-modal .in-cyc .in-ico,#imissnuke-modal .in-fold .in-ico{color:#8a8a8a}
 #imissnuke-modal .in-cyc-v{flex:1;text-align:left;font-weight:600}
 #imissnuke-modal .in-dots{display:inline-flex;gap:3px}
 #imissnuke-modal .in-dots i{width:5px;height:5px;border-radius:50%;background:#4a4a4a}
 #imissnuke-modal .in-dots i.on{background:#64a8f0}
 #imissnuke-modal .in-fold{min-width:168px;justify-content:space-between}
 #imissnuke-modal .in-off{opacity:.38;pointer-events:none;filter:grayscale(.6)}
-#imissnuke-modal .in-keys{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;width:100%;margin-top:2px;padding:9px 10px;background:rgba(0,0,0,.18);border:1px solid #303030;border-radius:6px}
-#imissnuke-modal .in-k{display:flex;align-items:center;gap:3px;color:#6e6e6e;font-size:10px;white-space:nowrap}
-#imissnuke-modal .in-k kbd{font:600 10.5px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e2e2e2;background:#2a2a2a;border:1px solid #3c3c3c;border-bottom-width:2px;border-radius:4px;padding:3px 5px}
-#imissnuke-modal .in-d{align-self:center;color:#b0b0b0;font-size:11.5px}
+#imissnuke-modal .in-btns{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+#imissnuke-modal .in-in{width:168px;font:500 12.5px/1.2 Inter,system-ui,sans-serif;color:#e6e6e6;background:#111111;border:1px solid #3a3a3a;border-radius:6px;padding:6px 8px;outline:none}
+#imissnuke-modal .in-in:focus{border-color:#64a8f0}
+#imissnuke-modal .in-kl{grid-column:1/-1;display:flex;flex-direction:column;gap:1px;margin-top:-4px;padding:4px;background:rgba(0,0,0,.18);border:1px solid #303030;border-radius:6px}
+#imissnuke-modal .in-kr{display:flex;align-items:center;gap:10px;padding:5px 8px;border-radius:6px;border:1px solid transparent}
+#imissnuke-modal .in-kr:hover{background:#262626;border-color:#333333}
+#imissnuke-modal .in-kr > .in-ico{color:#9aa4b2;flex:none}
+#imissnuke-modal .in-kn{flex:1;min-width:0;font:500 12.5px/1.25 Inter,system-ui,sans-serif;color:#e6e6e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#imissnuke-modal .in-kc{margin:0;flex:none;min-width:24px;text-align:center;font:500 10.5px/1 "JetBrains Mono",ui-monospace,Consolas,monospace;color:#9a9a9a;background:#262626;border:1px solid #3a3a3a;border-radius:4px;padding:3px 6px;cursor:pointer;transition:border-color .12s,color .12s}
+#imissnuke-modal button.in-kc:hover{color:#ffffff;border-color:#5c94f0}
+#imissnuke-modal .in-kc.mod{color:#cfe2ff;border-color:#3f6aa8}
+#imissnuke-modal .in-kc.none{color:#5a5a5a;border-style:dashed}
+#imissnuke-modal .in-kc.rec{color:#211927;background:#F2FF59;border-color:#F2FF59;animation:in-blink 1s ease-in-out infinite}
+#imissnuke-modal .in-kc.fixed{background:transparent;border-color:#2e2e2e;color:#6e6e6e;cursor:default}
+#imissnuke-modal .in-st{font-size:11px;line-height:1.35;color:#8a8a8a}
+#imissnuke-modal .in-kl .in-st{padding:4px 8px 2px}
+#imissnuke-modal .in-st.ok{color:#7fbf8f}
+#imissnuke-modal .in-st.err{color:#e8735f}
 #imissnuke-modal .in-foot{display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #333333}
+@keyframes in-blink{50%{opacity:.55}}
+.in-tip{position:fixed;z-index:2147483640;max-width:280px;padding:8px 10px;border-radius:8px;background:#111113;border:1px solid #3a3a3e;color:#dcdcdc;font:400 11.5px/1.45 Inter,system-ui,sans-serif;box-shadow:0 10px 28px rgba(0,0,0,.5);pointer-events:none;opacity:0;transform:translateY(-2px);transition:opacity 90ms ease,transform 90ms ease}
+.in-tip.on{opacity:1;transform:none}
 `;
 		}
 
 		static control(r) {
 			if (r.kind === 'cycle') {
 				const i = Math.max(0, r.opts.indexOf(config[r.key]));
-				return `<button type="button" class="in-b in-cyc" data-in-cycle="${r.key}" title="Click for the next option">`
+				return `<button type="button" class="in-b in-cyc" data-in-cycle="${r.key}">`
 					+ `<span class="in-cyc-v">${r.names[i]}</span>`
 					+ `<span class="in-dots">${r.opts.map((o, j) => `<i${j === i ? ' class="on"' : ''}></i>`).join('')}</span>`
 					+ inIco('sync', 12) + '</button>';
@@ -6480,9 +6848,58 @@
 			return `<button type="button" class="in-b${v ? ' on' : ''}" data-in-toggle="${r.key}">${txt}</button>`;
 		}
 
+		// One key: icon, name, and its chip. A keyboard key's chip is the remap
+		// button (click, then press); a fixed one is just a label.
+		static keyRow(k) {
+			let chip;
+			if (!k.id) {
+				chip = `<span class="in-kc fixed" data-in-tip="Fixed">${inEsc(k.fixed)}</span>`;
+			} else {
+				const b = keymap[k.id];
+				const def = buildKeymap({})[k.id];
+				const rec = ImissNukeUI._binding === k.id;
+				const mod = !inKeySame(inKeyNorm(b), inKeyNorm(def));
+				const cls = rec ? ' rec' : !b ? ' none' : mod ? ' mod' : '';
+				const tip = rec ? 'Press the new key · Esc cancels · Backspace clears it'
+					: 'Click to change' + (mod ? ' · right-click: back to ' + inKeyLabel(def) : '');
+				chip = `<button type="button" class="in-kc${cls}" data-in-bind="${k.id}" data-in-tip="${inEsc(tip)}">`
+					+ (rec ? 'Press a key…' : inEsc(inKeyLabel(b))) + '</button>';
+			}
+			return `<div class="in-kr" data-in-tip="${inEsc(k.tip)}">${inIco(k.icon, 15)}<span class="in-kn">${inEsc(k.name)}</span>${chip}</div>`;
+		}
+
+		static presetsHTML() {
+			const L = IN_PRESETS.list;
+			const i = L.findIndex(p => p.name === IN_PRESETS.active);
+			const cur = i >= 0 ? L[i] : null;
+			const arm = !!ImissNukeUI._delArm;
+			let h = '';
+			if (L.length) {
+				h += `<div class="in-btns">`
+					+ `<button type="button" class="in-b in-cyc" data-in-preset data-in-tip="Click for the next preset: its settings and keys come with it">`
+						+ `<span class="in-cyc-v">${cur ? inEsc(cur.name) + (inPresetDirty() ? ' <small>· changed</small>' : '') : '<small>None in use</small>'}</span>`
+						+ `<span class="in-dots">${L.map((p, j) => `<i${j === i ? ' class="on"' : ''}></i>`).join('')}</span>`
+						+ inIco('sync', 12) + `</button>`
+					+ (cur ? `<button type="button" class="in-b in-sq${arm ? ' danger' : ''}" data-in-pdel data-in-tip="${arm ? 'Click again to delete it' : 'Delete this preset'}">`
+						+ inIco('trash', 13) + (arm ? '<span>Delete?</span>' : '') + `</button>` : '')
+				+ `</div>`;
+			}
+			if (typeof ImissNukeUI._naming === 'string') {
+				h += `<div class="in-btns">`
+					+ `<input type="text" class="in-in" data-in-pname maxlength="40" spellcheck="false" placeholder="Preset name" value="${inEsc(ImissNukeUI._naming)}">`
+					+ `<button type="button" class="in-b on" data-in-pok>${inIco('check', 13)}<span>Save</span></button>`
+				+ `</div>`;
+			} else {
+				h += `<div class="in-btns"><button type="button" class="in-b" data-in-psave data-in-tip="Keep the settings and keys in use under a name. The same name updates it">`
+					+ `${inIco('floppy', 13)}<span>Save Preset…</span></button></div>`;
+			}
+			return h;
+		}
+
 		static render() {
 			const modal = document.getElementById('imissnuke-modal');
 			if (!modal) return;
+			if (ImissNukeUI._tip) ImissNukeUI._tip.classList.remove('on');
 			const on = config.masterEnabled !== false;
 			const keysOpen = !!ImissNukeUI._keysOpen;
 			// ⚑ a row whose target this frontend has not got is not offered:
@@ -6490,11 +6907,16 @@
 			const rows = ImissNukeUI.ROWS.filter(r => !r.when || r.when()).map(r => {
 				const dim = (r.kind !== 'master' && !on) || (r.needs && !config[r.needs]);
 				const cls = dim ? ' in-off' : '';
-				return `<label class="in-l${cls}">${inIco(r.icon, 14)}<span>${r.label}</span></label>`
-					+ `<div class="in-c${cls}">${ImissNukeUI.control(r)}<div class="in-note">${r.note}</div></div>`;
+				const tip = ` data-in-tip="${inEsc(r.tip)}"`;
+				return `<label class="in-l${cls}"${tip}>${inIco(r.icon, 14)}<span>${r.label}</span></label>`
+					+ `<div class="in-c${cls}"${tip}>${ImissNukeUI.control(r)}</div>`;
 			}).join('');
-			const keys = ImissNukeUI.KEYS.map(([k, d]) =>
-				`<div class="in-k">${k.map(x => `<kbd>${x}</kbd>`).join('+')}</div><div class="in-d">${d}</div>`).join('');
+			const nMod = Object.keys(keymapOverrides(keymap)).length;
+			const kmsg = ImissNukeUI._kmsg, msg = ImissNukeUI._msg;
+			const keyList = keysOpen
+				? `<div class="in-kl">${ImissNukeUI.KEYS.map(ImissNukeUI.keyRow).join('')}`
+					+ (kmsg ? `<div class="in-st ${kmsg.cls}">${inEsc(kmsg.text)}</div>` : '') + `</div>`
+				: '';
 
 			modal.innerHTML =
 				`<div class="in-t">`
@@ -6504,16 +6926,25 @@
 				+ `<div class="in-grid">${rows}`
 					+ `<label class="in-l">${inIco('keyboard', 14)}<span>Shortcuts</span></label>`
 					+ `<div class="in-c">`
-						+ `<button type="button" class="in-b in-fold" data-in-keys>`
-							+ `<span>${ImissNukeUI.KEYS.length} Nuke keys</span>${inIco(keysOpen ? 'chevDown' : 'chevRight', 13)}</button>`
-						+ (keysOpen ? `<div class="in-keys">${keys}</div>` : '')
+						+ `<button type="button" class="in-b in-fold" data-in-keys data-in-tip="Click a key to change it">`
+							+ `<span>${ImissNukeUI.KEYS.length} keys${nMod ? ` <small>· ${nMod} changed</small>` : ''}</span>`
+							+ inIco(keysOpen ? 'chevDown' : 'chevRight', 13) + `</button>`
 					+ `</div>`
+					+ keyList
+					+ `<label class="in-l">${inIco('bookmark', 14)}<span>Presets</span></label>`
+					+ `<div class="in-c">${ImissNukeUI.presetsHTML()}</div>`
+					+ `<label class="in-l">${inIco('save', 14)}<span>Backup &amp; Share</span></label>`
+					+ `<div class="in-c"><div class="in-btns">`
+						+ `<button type="button" class="in-b" data-in-export data-in-tip="Download your presets as a .json: a backup, or to give to someone">${inIco('save', 13)}<span>Download a Copy</span></button>`
+						+ `<button type="button" class="in-b" data-in-import data-in-tip="Open an ImissNuke presets .json. Its presets join yours; nothing is overwritten">${inIco('upload', 13)}<span>Load from File…</span></button>`
+					+ `</div>${msg ? `<div class="in-st ${msg.cls}">${inEsc(msg.text)}</div>` : ''}</div>`
 				+ `</div>`
 				+ `<div class="in-foot">`
-					+ `<button type="button" class="in-b ghost" data-in-reset title="Put the settings above back the way ImissNuke ships">${inIco('sync', 12)}<span>Reset to Defaults</span></button>`
+					+ `<button type="button" class="in-b ghost" data-in-reset data-in-tip="Factory settings and keys. Saved presets stay">${inIco('sync', 12)}<span>Reset to Defaults</span></button>`
 					+ `<button type="button" class="in-b" data-in-close>Done</button>`
 				+ `</div>`;
 
+			const $ = (s) => modal.querySelector(s);
 			modal.querySelectorAll('[data-in-close]').forEach(b => { b.onclick = ImissNukeUI.closeModal; });
 			modal.querySelectorAll('[data-in-toggle]').forEach(b => {
 				b.onclick = () => {
@@ -6530,12 +6961,107 @@
 					ImissNukeUI.changed(k);
 				};
 			});
-			const kb = modal.querySelector('[data-in-keys]');
-			if (kb) kb.onclick = () => { ImissNukeUI._keysOpen = !ImissNukeUI._keysOpen; ImissNukeUI.render(); };
-			const rb = modal.querySelector('[data-in-reset]');
+			const kb = $('[data-in-keys]');
+			if (kb) {
+				kb.onclick = () => {
+					ImissNukeUI._keysOpen = !ImissNukeUI._keysOpen;
+					ImissNukeUI._binding = null;
+					ImissNukeUI._kmsg = null;
+					ImissNukeUI.render();
+				};
+			}
+			modal.querySelectorAll('[data-in-bind]').forEach(b => {
+				const id = b.getAttribute('data-in-bind');
+				b.onclick = () => {
+					ImissNukeUI._binding = ImissNukeUI._binding === id ? null : id;
+					ImissNukeUI._kmsg = null;
+					ImissNukeUI.render();
+				};
+				b.oncontextmenu = (ev) => {
+					ev.preventDefault();
+					ImissNukeUI.rebind(id, buildKeymap({})[id]);
+				};
+			});
+
+			// ---- Presets ----
+			const pc = $('[data-in-preset]');
+			if (pc) {
+				pc.onclick = () => {
+					const L = IN_PRESETS.list;
+					if (!L.length) return;
+					const i = L.findIndex(p => p.name === IN_PRESETS.active);
+					inPresetApply(L[(i + 1) % L.length]);
+					ImissNukeUI._delArm = false;
+					ImissNukeUI._msg = null;
+					inPresetsSave();
+					ImissNukeUI.changed('*');
+				};
+			}
+			const pd = $('[data-in-pdel]');
+			if (pd) {
+				pd.onclick = () => {
+					if (!ImissNukeUI._delArm) {
+						ImissNukeUI._delArm = true;
+						clearTimeout(ImissNukeUI._delT);
+						ImissNukeUI._delT = setTimeout(() => {
+							if (!ImissNukeUI._delArm) return;
+							ImissNukeUI._delArm = false;
+							if (ImissNukeUI.isOpen() && typeof ImissNukeUI._naming !== 'string') ImissNukeUI.render();
+						}, 3000);
+						ImissNukeUI.render();
+						return;
+					}
+					const name = IN_PRESETS.active;
+					IN_PRESETS.list = IN_PRESETS.list.filter(p => p.name !== name);
+					IN_PRESETS.active = '';
+					ImissNukeUI._delArm = false;
+					ImissNukeUI._msg = { text: `Deleted “${name}”`, cls: '' };
+					inPresetsSave();
+					ImissNukeUI.render();
+				};
+			}
+			const ps = $('[data-in-psave]');
+			if (ps) {
+				ps.onclick = () => {
+					const cur = inPresetFind(IN_PRESETS.active);
+					ImissNukeUI._naming = cur ? cur.name : `Preset ${IN_PRESETS.list.length + 1}`;
+					ImissNukeUI._msg = null;
+					ImissNukeUI.render();
+					const inp = modal.querySelector('[data-in-pname]');
+					if (inp) { try { inp.focus(); inp.select(); } catch (e) {} }
+				};
+			}
+			const pn = $('[data-in-pname]');
+			if (pn) {
+				pn.oninput = () => { ImissNukeUI._naming = pn.value; };
+				pn.onkeydown = (ev) => {
+					if (ev.key === 'Enter') { ev.preventDefault(); ImissNukeUI.savePreset(pn.value); }
+				};
+			}
+			const pok = $('[data-in-pok]');
+			if (pok) pok.onclick = () => ImissNukeUI.savePreset(pn ? pn.value : '');
+
+			// ---- Backup & Share ----
+			const ex = $('[data-in-export]');
+			if (ex) {
+				ex.onclick = () => {
+					const name = inPresetsExport();
+					ImissNukeUI._msg = { text: `✓ ${name}`, cls: 'ok' };
+					ImissNukeUI.render();
+				};
+			}
+			const im = $('[data-in-import]');
+			if (im) im.onclick = () => ImissNukeUI.importFile();
+
+			const rb = $('[data-in-reset]');
 			if (rb) {
 				rb.onclick = () => {
 					Object.assign(config, USER_DEFAULTS);
+					inKeymapSet({});
+					ImissNukeUI._binding = null;
+					ImissNukeUI._kmsg = null;
+					ImissNukeUI._msg = null;
+					if (IN_PRESETS.active) { IN_PRESETS.active = ''; inPresetsSave(); }
 					ImissNukeUI.changed('*');
 				};
 			}
@@ -6550,6 +7076,92 @@
 			ImissNukeUI.render();
 		}
 
+		// A key goes to `id`. If another action had it, the two trade keys,
+		// so no press ever fires two things.
+		static rebind(id, b) {
+			const nb = inKeyNorm(b);
+			const old = keymap[id] ? { ...keymap[id] } : null;
+			let note = null;
+			if (nb) {
+				for (const other of Object.keys(keymap)) {
+					if (other === id || !inKeyClash(keymap[other], nb)) continue;
+					keymap[other] = old ? { ...old } : null;
+					const nm = (ImissNukeUI.KEYS.find(k => k.id === other) || {}).name || other;
+					note = { text: old ? `${nm} moved to ${inKeyLabel(old)}` : `${nm} has no key now`, cls: '' };
+				}
+			}
+			keymap[id] = nb;
+			saveKeymap(keymap);
+			ImissNukeUI._binding = null;
+			ImissNukeUI._kmsg = note;
+			ImissNukeUI.render();
+		}
+
+		// While a chip waits for its key, the press is the new key and
+		// nothing else gets it (window, capture: before the canvas and ComfyUI)
+		static onBindKey(e) {
+			const id = ImissNukeUI._binding;
+			if (!id || !ImissNukeUI.isOpen()) return;
+			e.preventDefault();
+			e.stopPropagation();
+			e.stopImmediatePropagation();
+			const k = String(e.key || '');
+			if (/^(Shift|Control|Alt|Meta|AltGraph|CapsLock|OS|Fn|Dead|Unidentified)$/.test(k)) return;
+			if (k === 'Escape') { ImissNukeUI._binding = null; ImissNukeUI.render(); return; }
+			const mods = inKeyMods(e);
+			if (!mods && (k === 'Backspace' || k === 'Delete')) { ImissNukeUI.rebind(id, null); return; }
+			const b = { key: k.toLowerCase(), code: String(e.code || ''), mods };
+			const why = inKeyReserved(b);
+			if (why) { ImissNukeUI._kmsg = { text: why, cls: 'err' }; ImissNukeUI.render(); return; }
+			ImissNukeUI.rebind(id, b);
+		}
+
+		static savePreset(raw) {
+			const name = String(raw || '').trim().slice(0, 40);
+			ImissNukeUI._naming = null;
+			if (!name) { ImissNukeUI.render(); return; }
+			const p = inPresetNow(name);
+			const old = inPresetFind(name);
+			if (old) IN_PRESETS.list[IN_PRESETS.list.indexOf(old)] = p;
+			else IN_PRESETS.list.push(p);
+			IN_PRESETS.active = p.name;
+			ImissNukeUI._delArm = false;
+			ImissNukeUI._msg = { text: `✓ ${old ? 'Updated' : 'Saved'} “${p.name}”`, cls: 'ok' };
+			inPresetsSave();
+			ImissNukeUI.render();
+		}
+
+		static importFile() {
+			const inp = document.createElement('input');
+			inp.type = 'file';
+			inp.accept = '.json,application/json';
+			inp.style.display = 'none';
+			inp.onchange = () => {
+				const f = inp.files && inp.files[0];
+				inp.remove();
+				if (!f) return;
+				f.text().then(t => {
+					let d = null;
+					try { d = JSON.parse(t); } catch (e) { d = null; }
+					const r = inPresetsImport(d);
+					if (!r.pick) {
+						ImissNukeUI._msg = { text: 'That file has no ImissNuke presets', cls: 'err' };
+						ImissNukeUI.render();
+						return;
+					}
+					inPresetApply(r.pick);
+					ImissNukeUI._msg = {
+						text: r.added.length > 1 ? `✓ Loaded ${r.added.length} presets · using “${r.pick.name}”` : `✓ Loaded “${r.pick.name}”`,
+						cls: 'ok'
+					};
+					inPresetsSave();
+					ImissNukeUI.changed('*');
+				}).catch(() => {});
+			};
+			document.body.appendChild(inp);
+			inp.click();
+		}
+
 		static init() {
 			if (document.getElementById('imissnuke-ui-root')) return;
 
@@ -6561,8 +7173,12 @@
 
 			ImissNukeUI.setupTopBarMounting();
 			ImissNukeUI.render();
+			inPresetsLoad();
 
-			// A click anywhere else closes it; so does Esc
+			window.addEventListener('keydown', ImissNukeUI.onBindKey, true);
+
+			// A click anywhere else closes it; so does Esc (Esc in the name box
+			// only drops the name)
 			document.addEventListener('pointerdown', (e) => {
 				if (!ImissNukeUI.isOpen()) return;
 				const m = document.getElementById('imissnuke-modal');
@@ -6573,7 +7189,34 @@
 			document.addEventListener('keydown', (e) => {
 				if (e.key !== 'Escape' || !ImissNukeUI.isOpen()) return;
 				e.stopPropagation();
+				if (typeof ImissNukeUI._naming === 'string') { ImissNukeUI._naming = null; ImissNukeUI.render(); return; }
 				ImissNukeUI.closeModal();
+			}, true);
+
+			// One floating tip for anything with data-in-tip, as the Hotbox
+			// does it: on body, so the scrolling panel never clips it
+			document.addEventListener('mouseover', (e) => {
+				const t = e.target && e.target.closest ? e.target.closest('[data-in-tip]') : null;
+				if (!t) return;
+				let tip = ImissNukeUI._tip;
+				if (!tip) {
+					tip = ImissNukeUI._tip = document.createElement('div');
+					tip.className = 'in-tip';
+					document.body.appendChild(tip);
+				}
+				tip.textContent = t.getAttribute('data-in-tip') || '';
+				tip.style.left = '0px';
+				tip.style.top = '0px';
+				const r = t.getBoundingClientRect(), tr = tip.getBoundingClientRect();
+				let y = r.bottom + 6;
+				if (y + tr.height > (window.innerHeight || 900) - 10) y = r.top - tr.height - 6;
+				tip.style.left = Math.max(10, Math.min((window.innerWidth || 1600) - tr.width - 10, r.left)) + 'px';
+				tip.style.top = Math.max(10, y) + 'px';
+				tip.classList.add('on');
+			}, true);
+			document.addEventListener('mouseout', (e) => {
+				const t = e.target && e.target.closest ? e.target.closest('[data-in-tip]') : null;
+				if (t && !(e.relatedTarget && t.contains(e.relatedTarget)) && ImissNukeUI._tip) ImissNukeUI._tip.classList.remove('on');
 			}, true);
 		}
 	}
