@@ -1,2 +1,8 @@
 __pycache__/
-*.pyc
+*.py[cod]
+.DS_Store
+Thumbs.db
+*.zip
+
+# Personal notes for chats (local only, not part of the extension)
+GUIA_PROYECTO_Y_NUEVO_CHAT.md

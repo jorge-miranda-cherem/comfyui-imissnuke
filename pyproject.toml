@@ -1,0 +1,16 @@
+[project]
+name = "comfyui-imissnuke"
+description = "Nuke-style node graph for ComfyUI: Nuke hotkeys (Tab, F, D, Shift+Q, Ctrl+Shift+X…), straight Nuke pipes, groups as backdrops, remappable keys and presets. No Python nodes, zero dependencies."
+version = "2.2.0"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/jorge-miranda-cherem/comfyui-imissnuke"
+Documentation = "https://github.com/jorge-miranda-cherem/comfyui-imissnuke#readme"
+"Bug Tracker" = "https://github.com/jorge-miranda-cherem/comfyui-imissnuke/issues"
+
+[tool.comfy]
+PublisherId = "jorge-miranda"
+DisplayName = "ImissNuke"
+Icon = "https://raw.githubusercontent.com/jorge-miranda-cherem/comfyui-imissnuke/main/assets/imissnuke-icon.png"
