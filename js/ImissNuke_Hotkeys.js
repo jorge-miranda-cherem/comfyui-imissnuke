@@ -5396,9 +5396,17 @@
 	 *   · los 45 colores de Pixaroma (GROUP_COLORS), con su cuerpo.
 	 *   · en vivo sobre todo lo seleccionado; un grupo lleva el color del
 	 *     header (como lo dibuja patchGroupDraw, v18.86).
-	 * ⚑⚑ La marca `_n2c_hdr` sigue siendo la ley (el switch [Node colours]
-	 * del Scene Manager la lee): candado cerrado = marca { c: título,
-	 * bg: título al 45 % }; candado abierto = sin marca.
+	 * ⚑⚑ La marca `_n2c_hdr` sigue siendo la ley: candado cerrado = marca
+	 * { c: título, bg: título al 45 % }; candado abierto = sin marca.
+	 * ⚑⚑ v2.4 (2026-11-10) — Jorge, desde el Scene Manager (SM 9.148): "esto
+	 * envíaselo a imiss nuke… y quitémoslo de nuestro scene manager". El
+	 * switch [Node colours] del panel se muda aquí: la fila Node Color de
+	 * Settings ESCRIBE `imissnuke-color-style` ('header' | 'full') y mueve
+	 * de una vez los nodos de color del grafo en vista (bulk, el hdrBulk
+	 * del panel tal cual). El panel sigue LEYENDO la llave para pintar lo
+	 * que crea (crops, stitches, api) y escribe la misma marca { c, bg }:
+	 * la llave y la forma de la marca son todo el contrato — no se cambian
+	 * sin decírselo a Jorge.
 	 * ⚑⚑ Reset por el SETTER (= undefined), nunca `delete`: Nodes 2.0 pierde
 	 * el accessor reactivo (la lección de Pixaroma).
 	 * ⚑ Un paso de undo por GESTO terminado (changeTracker.checkState). */
@@ -5450,6 +5458,83 @@
 		}
 		static headerOnly() {
 			try { return localStorage.getItem(this.STYLE_KEY) !== 'full'; } catch (e) { return true; }
+		}
+
+		/* ---- Node Color: el grafo entero de un estilo al otro (v2.4) ----
+		   El hdrBulk del Scene Manager, tal cual se mudó: hdrHead / hdrBody /
+		   hdrSkip. */
+		static hsl(c) {
+			const r = c[0] / 255, g = c[1] / 255, b = c[2] / 255;
+			const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+			let s = 0, h = 0;
+			if (d) {
+				s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+				h = (mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4) / 6;
+			}
+			return [h, s, l];
+		}
+		static fromHsl(h, s, l) {
+			if (!s) return [l * 255, l * 255, l * 255];
+			const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+			const f = (t) => {
+				if (t < 0) t += 1; if (t > 1) t -= 1;
+				if (t < 1 / 6) return p + (q - p) * 6 * t;
+				if (t < 1 / 2) return q;
+				if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+				return p;
+			};
+			return [f(h + 1 / 3) * 255, f(h) * 255, f(h - 1 / 3) * 255];
+		}
+		// the header a full pair turns into: the more saturated of the two,
+		// made bright enough to read over the dark body ('#rrggbb')
+		static head(color, bg) {
+			const a = this.rgb(color), b = this.rgb(bg);
+			let pick = a || b;
+			if (a && b) pick = (this.hsl(b)[1] > this.hsl(a)[1] + 0.05) ? b : a;
+			if (!pick) return color;
+			const hsl = this.hsl(pick);
+			if (hsl[2] >= 0.36) return '#' + this.hexOf(pick);
+			if (hsl[1] < 0.08) return '#' + this.hexOf(this.fromHsl(0, 0, 0.3));
+			return '#' + this.hexOf(this.fromHsl(hsl[0], Math.max(hsl[1], 0.45), 0.42));
+		}
+		// labels, notes, title-less nodes and nodes with no color are never moved
+		static skip(n) {
+			if (!n) return true;
+			const t = String(n.type || n.comfyClass || '');
+			if (t === 'Label (rgthree)' || /^(Note|MarkdownNote)$/.test(t) || /^Pixaroma(Label|Info|Note)$/.test(t)) return true;
+			if (n.flags && n.flags.no_title) return true;
+			return !this.hex6(n.color) && !this.hex6(n.bgcolor);
+		}
+		/* on: every colored node without the mark keeps its pair in the mark
+		   and goes header + dark body. off: every node with the mark gets its
+		   pair back and loses the mark; a node without it is never touched.
+		   The graph in view (a subgraph when you are inside one); one undo
+		   step. Returns how many moved. */
+		static bulk(on) {
+			const g = (app.canvas && app.canvas.graph) || app.graph;
+			let moved = 0;
+			((g && g._nodes) || []).forEach(n => {
+				if (!n || this.skip(n)) return;
+				const mk = n.properties && n.properties._n2c_hdr;
+				try {
+					if (on) {
+						if (mk || !n.color) return;
+						const c = n.color, b = n.bgcolor, hd = this.head(c, b);
+						n.properties = n.properties || {};
+						n.properties._n2c_hdr = { c: c, bg: b || '' };
+						n.color = hd;
+						n.bgcolor = '#' + this.body(hd);
+						moved++;
+					} else if (mk) {
+						n.color = mk.c || n.color;
+						n.bgcolor = mk.bg || undefined;   // the setter, never delete (Nodes 2.0)
+						delete n.properties._n2c_hdr;
+						moved++;
+					}
+				} catch (e) {}
+			});
+			if (moved) { this.dirty(); this.undoMark(); }
+			return moved;
 		}
 		static cur() { const S = this.S; return S.tgt === 'body' ? S.b : S.t; }
 
@@ -6209,6 +6294,7 @@
 		power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
 		keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
 		pipes: '<circle cx="5" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 6h4l2 2v8l2 2h2"/>',
+		nodeHead: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M6 6.5h6"/>',
 		palette: '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.8 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1a1.6 1.6 0 0 1 1.6-1.7h2c3 0 5.6-2.5 5.6-5.6C22 6 17.5 2 12 2z"/>',
 		group: '<rect x="3" y="4" width="18" height="16" rx="2" stroke-dasharray="3 2.6"/><path d="M3 9h18"/>',
 		searchOff: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="7" y1="7" x2="15" y2="15"/>',
@@ -6826,6 +6912,11 @@
 				{ key: 'lineColorMode', icon: 'palette', label: 'Wire Color', kind: 'cycle', needs: 'nukeLinesEnabled',
 					opts: ['original', 'nukeDark'], names: ['Original Colors', 'Nuke Black'],
 					tip: 'Type colors, or all black like Nuke.' },
+				// not in `config`: its own localStorage key, which the Scene
+				// Manager panel reads too, so presets and Reset leave it alone
+				{ key: 'nodeColorStyle', icon: 'nodeHead', label: 'Node Color', kind: 'style',
+					opts: ['header', 'full'], names: ['Header Only', 'Full'],
+					tip: 'Colored title over a dark body, or the whole node. Moves this graph.' },
 				{ key: 'nukeGroupsEnabled', icon: 'group', label: 'Backdrops', kind: 'toggle',
 					tip: 'Groups as Nuke backdrops, with run / bypass / mute buttons.' },
 				{ key: 'blockOutputDropSearch', icon: 'searchOff', label: 'Output Drop', kind: 'toggle',
@@ -6925,9 +7016,11 @@
 		}
 
 		static control(r) {
-			if (r.kind === 'cycle') {
-				const i = Math.max(0, r.opts.indexOf(config[r.key]));
-				return `<button type="button" class="in-b in-cyc" data-in-cycle="${r.key}">`
+			if (r.kind === 'cycle' || r.kind === 'style') {
+				const i = r.kind === 'style'
+					? (ImissNukeColorPicker.headerOnly() ? 0 : 1)
+					: Math.max(0, r.opts.indexOf(config[r.key]));
+				return `<button type="button" class="in-b in-cyc" data-in-${r.kind}="${r.key}">`
 					+ `<span class="in-cyc-v">${r.names[i]}</span>`
 					+ `<span class="in-dots">${r.opts.map((o, j) => `<i${j === i ? ' class="on"' : ''}></i>`).join('')}</span>`
 					+ inIco('sync', 12) + '</button>';
@@ -6993,18 +7086,20 @@
 			if (ImissNukeUI._tip) ImissNukeUI._tip.classList.remove('on');
 			const on = config.masterEnabled !== false;
 			const keysOpen = !!ImissNukeUI._keysOpen;
-			const rows = ImissNukeUI.ROWS.map(r => {
-				const dim = (r.kind !== 'master' && !on) || (r.needs && !config[r.needs]);
-				const cls = dim ? ' in-off' : '';
-				const tip = ` data-in-tip="${inEsc(r.tip)}"`;
-				return `<label class="in-l${cls}"${tip}>${inIco(r.icon, 14)}<span>${r.label}</span></label>`
-					+ `<div class="in-c${cls}"${tip}>${ImissNukeUI.control(r)}</div>`;
-			}).join('');
 			const nMod = Object.keys(keymapOverrides(keymap)).length;
 			const kmsg = ImissNukeUI._kmsg, msg = ImissNukeUI._msg;
 			// a message shows under the row whose button made it
 			const msgAt = (at) => (msg && (msg.at || 'backup') === at
 				? `<div class="in-st ${msg.cls}">${inEsc(msg.text)}</div>` : '');
+			const rows = ImissNukeUI.ROWS.map(r => {
+				// Node Color is a look, not a Nuke key: it works with ImissNuke off
+				// (the Scene Manager panel turns ImissNuke off and colors with it)
+				const dim = r.kind !== 'style' && ((r.kind !== 'master' && !on) || (r.needs && !config[r.needs]));
+				const cls = dim ? ' in-off' : '';
+				const tip = ` data-in-tip="${inEsc(r.tip)}"`;
+				return `<label class="in-l${cls}"${tip}>${inIco(r.icon, 14)}<span>${r.label}</span></label>`
+					+ `<div class="in-c${cls}"${tip}>${ImissNukeUI.control(r)}${r.kind === 'style' ? msgAt('colors') : ''}</div>`;
+			}).join('');
 			const keyList = keysOpen
 				? `<div class="in-kl">${ImissNukeUI.KEYS.map(ImissNukeUI.keyRow).join('')}`
 					+ (kmsg ? `<div class="in-st ${kmsg.cls}">${inEsc(kmsg.text)}</div>` : '') + `</div>`
@@ -7062,6 +7157,9 @@
 					config[k] = r.opts[(Math.max(0, r.opts.indexOf(config[k])) + 1) % r.opts.length];
 					ImissNukeUI.changed(k);
 				};
+			});
+			modal.querySelectorAll('[data-in-style]').forEach(b => {
+				b.onclick = () => ImissNukeUI.colorStyle(ImissNukeColorPicker.headerOnly() ? 'full' : 'header');
 			});
 			const kb = $('[data-in-keys]');
 			if (kb) {
@@ -7179,6 +7277,21 @@
 					ImissNukeUI.changed('*');
 				};
 			}
+		}
+
+		/* Node Color: Header Only / Full. Writes 'imissnuke-color-style' (the
+		   key the Ctrl+Shift+C palette and the Scene Manager panel read) and
+		   moves the colored nodes of the graph in view in one pass. */
+		static colorStyle(mode) {
+			const full = mode === 'full';
+			try { localStorage.setItem(ImissNukeColorPicker.STYLE_KEY, full ? 'full' : 'header'); } catch (e) {}
+			let n = 0;
+			try { n = ImissNukeColorPicker.bulk(!full); } catch (e) { console.warn('[ImissNuke] Node Color:', e); }
+			const s = n === 1 ? '' : 's';
+			ImissNukeUI._msg = full
+				? { text: n ? `✓ ${n} node${s} back to the colors they had · Ctrl+Z undoes it` : 'New colors fill the whole node', cls: n ? 'ok' : '', at: 'colors' }
+				: { text: n ? `✓ ${n} colored node${s} of this graph moved to Header Only · Ctrl+Z undoes it` : 'New colors go on the header only', cls: n ? 'ok' : '', at: 'colors' };
+			ImissNukeUI.render();
 		}
 
 		static changed(key) {

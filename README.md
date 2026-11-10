@@ -45,6 +45,7 @@ Restart ComfyUI. The yellow **N** in the top bar opens the settings. Right-click
 ## Settings
 
 **D Key** Bypass or Mute · **Nuke Pipes** straight wires with 45° bends · **Wire Color** type colors or all black ·
+**Node Color** a colored header over a dark body, or the whole node (switching moves the colored nodes of the open graph too) ·
 **Backdrops** groups drawn as Nuke backdrops · **Output Drop** what a wire dropped on empty canvas does.
 
 Hover any row in the panel for a one-line tip.
